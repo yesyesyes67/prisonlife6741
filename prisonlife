@@ -1,0 +1,2918 @@
+-- unnamed enchantments + avenir merge
+-- Roblox Lua (Luau)
+
+local uis = game:GetService("UserInputService")
+local Players = game:GetService("Players")
+local ws = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local StarterGui = game:GetService("StarterGui")
+local TextChatService = game:GetService("TextChatService")
+local Stats = game:GetService("Stats")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CoreGui = game:GetService("CoreGui")
+local PhysicsService = game:GetService("PhysicsService")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = ws.CurrentCamera
+
+local StickyTarget = nil
+local CurrentSilentAimChar = nil
+local CurrentSilentAimPlayer = nil
+
+local SilentAimChamEnabled = false
+local SilentAimChamColor = Color3.fromRGB(219, 68, 103)
+local SilentAimCham = nil
+
+local UnlockFpsEnabled = false
+local UnlockFpsValue = 240
+local OriginalFpsCap = nil
+pcall(function() OriginalFpsCap = getfpscap() end)
+
+local function ApplyFpsCap()
+    if UnlockFpsEnabled then
+        pcall(function() setfpscap(UnlockFpsValue) end)
+    else
+        pcall(function()
+            if OriginalFpsCap then
+                setfpscap(OriginalFpsCap)
+            else
+                setfpscap(60)
+            end
+        end)
+    end
+end
+
+local Killed = false
+local OriginalNamecall = nil
+local OriginalNewIndex = nil
+
+-- ============================================================
+-- Prison Life noclip bypass
+-- ============================================================
+-- Prison Life runs a server-side collision re-apply loop whose
+-- source identifier contains "CharacterCollision". It resets
+-- CanCollide = true on every character part each physics step,
+-- which defeats a plain client-side noclip loop. Two layers:
+--   1. hookfunction the checker to a no-op closure at load.
+--   2. collision-group fallback for executors that block
+--      getgc/hookfunction — the checker does not audit
+--      CollisionGroup, so this sidesteps it entirely.
+-- ============================================================
+
+local NOCLIP_GROUP = "noclip_grp"
+
+pcall(function()
+    PhysicsService:RegisterCollisionGroup(NOCLIP_GROUP)
+end)
+pcall(function()
+    PhysicsService:CollisionGroupSetCollidable(NOCLIP_GROUP, "Default", false)
+end)
+
+local NoclipHookInstalled = false
+pcall(function()
+    local noop = newcclosure(function() return end)
+    for _, obj in ipairs(getgc(false)) do
+        if typeof(obj) == "function" then
+            local ok, source = pcall(debug.info, obj, "s")
+            if ok and source and source:find("CharacterCollision") then
+                pcall(hookfunction, obj, noop)
+                NoclipHookInstalled = true
+            end
+        end
+    end
+end)
+
+local function ApplyNoclipToCharacter(char)
+    if not char then return end
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.CanCollide = false
+            pcall(function() part.CollisionGroup = NOCLIP_GROUP end)
+        end
+    end
+end
+
+local LightingSnapshot = {
+    Brightness = Lighting.Brightness,
+    ClockTime = Lighting.ClockTime,
+    FogColor = Lighting.FogColor,
+    FogStart = Lighting.FogStart,
+    FogEnd = Lighting.FogEnd,
+    Ambient = Lighting.Ambient,
+    OutdoorAmbient = Lighting.OutdoorAmbient,
+    ExposureCompensation = Lighting.ExposureCompensation,
+    GlobalShadows = Lighting.GlobalShadows,
+}
+
+local NoRecoilEnabled = false
+local lastCleanCF = (ws.CurrentCamera and ws.CurrentCamera.CFrame) or CFrame.new()
+local suppressCameraWrite = false
+local recoilLastFired = 0
+
+local EspBoxColor         = Color3.fromRGB(255, 255, 255)
+local EspNameColor        = Color3.fromRGB(255, 255, 255)
+local EspHealthColor      = Color3.fromRGB(0, 255, 0)
+local EspHealthTextColor  = Color3.fromRGB(255, 255, 255)
+local EspSkeletonColor    = Color3.fromRGB(255, 255, 255)
+local EspDistanceColor    = Color3.fromRGB(200, 200, 200)
+local EspChamsColor       = Color3.fromRGB(219, 68, 103)
+local HudKeybindColor     = Color3.fromRGB(255, 255, 255)
+local WorldAmbientColor   = Color3.fromRGB(70, 70, 70)
+local WorldFogColorPick   = Color3.fromRGB(192, 192, 192)
+local WorldOutdoorAmbient = Color3.fromRGB(70, 70, 70)
+
+local repo = "https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/refs/heads/main/"
+local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
+local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
+local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
+
+local Window = Library:CreateWindow({
+    Title = "unnamed enchantments",
+    Center = true,
+    AutoShow = true,
+})
+
+task.defer(function()
+    local topbar = Window.Topbar
+    if not topbar then return end
+    for _, d in ipairs(topbar:GetDescendants()) do
+        if d:IsA("TextLabel") and d.Text == "unnamed enchantments" then
+            d.TextXAlignment = Enum.TextXAlignment.Center
+            d.Size = UDim2.new(1, 0, 1, 0)
+            d.Position = UDim2.new(0, 0, 0, 0)
+            break
+        end
+    end
+end)
+
+local MainTab = Window:AddTab("main")
+local SilentAimGroup = MainTab:AddLeftGroupbox("silent aim")
+local AimbotGroup = MainTab:AddRightGroupbox("aimbot")
+local TriggerGroup = MainTab:AddLeftGroupbox("triggerbot")
+
+local VisualsTab = Window:AddTab("visuals")
+local EspGroup = VisualsTab:AddLeftGroupbox("esp")
+local CameraGroup = VisualsTab:AddRightGroupbox("camera")
+
+local CharacterTab = Window:AddTab("character")
+local CharacterGroup = CharacterTab:AddLeftGroupbox("movement")
+local StrafeGroup = CharacterTab:AddRightGroupbox("target strafe")
+local VoidHideGroup = CharacterTab:AddLeftGroupbox("voidhide")
+local AnimGroup = CharacterTab:AddRightGroupbox("appearance")
+local DesyncGroup = CharacterTab:AddLeftGroupbox("semi desync voidfalls")
+local AntiLockGroup = CharacterTab:AddRightGroupbox("anti-lock")
+local StompGroup = CharacterTab:AddLeftGroupbox("stomp")
+local AutoBuyGroup = CharacterTab:AddRightGroupbox("auto buy")
+
+local WorldTab = Window:AddTab("world")
+local WorldLightGroup = WorldTab:AddLeftGroupbox("lighting")
+local WorldColorGroup = WorldTab:AddRightGroupbox("world colors")
+
+local SettingsTab = Window:AddTab("settings")
+local MenuGroup = SettingsTab:AddLeftGroupbox("menu")
+local HudGroup = SettingsTab:AddLeftGroupbox("hud")
+local HudColorGroup = SettingsTab:AddRightGroupbox("hud colors")
+
+MenuGroup:AddLabel("menu bind"):AddKeyPicker("MenuKeybind", {
+    Default = "Insert", NoUI = true, Text = "menu keybind",
+})
+
+Library.ToggleKeybind = Options.MenuKeybind
+
+local Utils = {}
+Utils.hascharacter = function(plr)
+    return plr and plr.Character
+        and plr.Character:FindFirstChild("Humanoid")
+        and plr.Character:FindFirstChild("HumanoidRootPart")
+end
+Utils.getping = function()
+    local ok, val = pcall(function()
+        return Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+    end)
+    return ok and val or 0
+end
+Utils.isplayerbehindwall = function(plr)
+    if not Utils.hascharacter(plr) or not Utils.hascharacter(LocalPlayer) then return true end
+    local cam = ws.CurrentCamera
+    if not cam then return true end
+    local targetHead = plr.Character:FindFirstChild("Head")
+    local targetHrp = plr.Character:FindFirstChild("HumanoidRootPart")
+    local targetPos = targetHead and targetHead.Position or (targetHrp and targetHrp.Position)
+    if not targetPos then return true end
+    local rp = RaycastParams.new()
+    rp.FilterType = Enum.RaycastFilterType.Exclude
+    rp.FilterDescendantsInstances = {LocalPlayer.Character}
+    local hit = ws:Raycast(cam.CFrame.Position, targetPos - cam.CFrame.Position, rp)
+    if hit and hit.Instance and not hit.Instance:IsDescendantOf(plr.Character) then
+        return true
+    end
+    return false
+end
+
+local DaHood = {}
+DaHood.isknocked = function(plr)
+    if not Utils.hascharacter(plr) then return false end
+    local char = plr.Character
+    if char:GetAttribute("Knocked") then return true end
+    local be = char:FindFirstChild("BodyEffects")
+    if be and be:FindFirstChild("K.O") and be["K.O"].Value then return true end
+    return false
+end
+DaHood.isdead = function(plr)
+    if not (plr and plr.Character) then return true end
+    local char = plr.Character
+    if char:GetAttribute("Dead") then return true end
+    local hum = char:FindFirstChild("Humanoid")
+    return hum and hum.Health <= 0
+end
+DaHood.getarmor = function(plr)
+    if not Utils.hascharacter(plr) then return 100 end
+    local char = plr.Character
+    for k, v in pairs(char:GetAttributes()) do
+        if string.lower(k):find("armor") then return v end
+    end
+    local be = char:FindFirstChild("BodyEffects")
+    if be and be:FindFirstChild("Armor") and be.Armor:IsA("NumberValue") then
+        return be.Armor.Value
+    end
+    return 100
+end
+
+local AimPartResolve = {
+    head = "Head",
+    humanoidrootpart = "HumanoidRootPart",
+    uppertorso = "UpperTorso",
+    lowertorso = "LowerTorso",
+}
+
+local function ResolveAimPart(name)
+    if not name then return "Head" end
+    return AimPartResolve[string.lower(name)] or "Head"
+end
+
+-- anti fling
+local AntiFlingEnabled = true
+
+local function antiFlingPlayer(player)
+    if Killed then return end
+    if not player or player == LocalPlayer then return end
+    pcall(function()
+        player.CharacterAppearanceLoaded:Wait()
+        if Killed or not AntiFlingEnabled then return end
+        local char = player.Character
+        if not char then return end
+        for _, child in pairs(char:GetChildren()) do
+            if child:IsA("BasePart") then
+                child.CanCollide = false
+                if child.Name == "Torso" then
+                    child.Massless = true
+                end
+                local vector = Vector3.new()
+                child.Velocity = vector
+                child.RotVelocity = vector
+            end
+        end
+    end)
+end
+
+local function antiFlingRunAll()
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            task.spawn(antiFlingPlayer, player)
+        end
+    end
+end
+
+Players.PlayerAdded:Connect(function(player)
+    if Killed then return end
+    player.CharacterAdded:Connect(function()
+        if not AntiFlingEnabled then return end
+        task.spawn(antiFlingPlayer, player)
+    end)
+end)
+
+CharacterGroup:AddToggle("NoclipEnabled", {Text = "noclip", Default = false}):AddKeyPicker("NoclipKey", {
+    Default = "None", Mode = "Toggle", Modes = {"Always","Toggle","Hold"},
+    Text = "noclip", SyncToggleState = true, NoUI = false,
+})
+
+CharacterGroup:AddToggle("FlyEnabled", {Text = "fly", Default = false}):AddKeyPicker("FlyKey", {
+    Default = "None", Mode = "Toggle", Modes = {"Always","Toggle","Hold"},
+    Text = "fly", SyncToggleState = true, NoUI = false,
+})
+
+CharacterGroup:AddSlider("FlySpeed", {
+    Text = "fly speed", Default = 100, Min = 0, Max = 1000, Rounding = 0, Suffix = "",
+})
+
+CharacterGroup:AddToggle("SpeedwalkEnabled", {Text = "speed", Default = false}):AddKeyPicker("SpeedwalkKey", {
+    Default = "None", Mode = "Toggle", Modes = {"Always","Toggle","Hold"},
+    Text = "speed", SyncToggleState = true, NoUI = false,
+})
+
+CharacterGroup:AddDropdown("SpeedwalkMode", {
+    Values = {"slippery", "cframe"}, Default = 2, Multi = false, Text = "speed mode",
+})
+
+CharacterGroup:AddSlider("WalkSpeedValue", {
+    Text = "speed value", Default = 100, Min = 1, Max = 1000, Rounding = 0, Suffix = "",
+})
+
+CharacterGroup:AddToggle("InfJumpEnabled", {Text = "infinite jump", Default = false}):AddKeyPicker("InfJumpKey", {
+    Default = "None", Mode = "Toggle", Modes = {"Always","Toggle","Hold"},
+    Text = "infinite jump", SyncToggleState = true, NoUI = false,
+})
+
+CharacterGroup:AddToggle("NoJumpCooldownEnabled", {
+    Text = "no jump cooldown",
+    Default = false,
+    Callback = function(v)
+        if v then
+            g = hookfunction(wait, function(seconds) return g(0) end)
+        end
+    end,
+})
+
+CharacterGroup:AddToggle("NoSlowdownEnabled", {
+    Text = "no slowdown",
+    Default = false,
+    Tooltip = "prevents walk speed drops when shooting or reloading",
+    Callback = function(v)
+        if v then
+            local char = LocalPlayer.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            if hum and hum.WalkSpeed < 16 then
+                hum.WalkSpeed = 16
+            end
+        end
+    end,
+})
+
+CharacterGroup:AddToggle("AntiFlingEnabled", {
+    Text = "anti fling",
+    Default = true,
+    Tooltip = "always on — disables collision on other players' parts",
+    Callback = function(v)
+        AntiFlingEnabled = v
+        if v then antiFlingRunAll() end
+    end,
+})
+
+antiFlingRunAll()
+
+StrafeGroup:AddToggle("StrafeEnabled", {Text = "target strafe", Default = false}):AddKeyPicker("StrafeKey", {
+    Default = "None", Mode = "Toggle", Modes = {"Always","Toggle","Hold"},
+    Text = "target strafe", SyncToggleState = true, NoUI = false,
+})
+
+StrafeGroup:AddDropdown("StrafeTargetMode", {
+    Values = {"closest", "silent aim", "aimbot"}, Default = 1, Multi = false, Text = "target mode",
+})
+
+StrafeGroup:AddToggle("StrafeTeamCheck", {Text = "team check", Default = false})
+
+StrafeGroup:AddSlider("StrafeSpeed", {
+    Text = "strafe speed", Default = 2, Min = 0, Max = 100, Rounding = 1, Suffix = "",
+})
+
+StrafeGroup:AddSlider("StrafeDistance", {
+    Text = "distance", Default = 8, Min = 2, Max = 60, Rounding = 1, Suffix = " studs",
+})
+
+StrafeGroup:AddSlider("StrafeHeight", {
+    Text = "height offset", Default = 0, Min = -10, Max = 10, Rounding = 1, Suffix = " studs",
+})
+
+local AntiLockState = { enabled = false, mode = "Jitter" }
+
+AntiLockGroup:AddToggle("AntiLockEnabled", {
+    Text = "enabled", Default = false,
+    Callback = function(v) AntiLockState.enabled = v end,
+}):AddKeyPicker("AntiLockKey", {
+    Default = "None", Mode = "Hold", Modes = {"Always","Toggle","Hold"},
+    Text = "anti-lock", SyncToggleState = false, NoUI = false,
+})
+
+AntiLockGroup:AddDropdown("AntiLockMode", {
+    Text = "mode",
+    Values = {"Jitter", "Reverse", "Side"},
+    Default = "Jitter", Multi = false,
+    Callback = function(v) AntiLockState.mode = v end,
+})
+
+local function AntiLockUpdate()
+    if Killed then return end
+    if not AntiLockState.enabled then return end
+    if not (Options.AntiLockKey and Options.AntiLockKey:GetState()) then return end
+    if not Utils.hascharacter(LocalPlayer) then return end
+    local hrp = LocalPlayer.Character.HumanoidRootPart
+    local mode = AntiLockState.mode
+    if mode == "Jitter" then
+        local ang = math.random(-180, 180)
+        hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, math.rad(ang), 0)
+    elseif mode == "Reverse" then
+        if StickyTarget and StickyTarget.Parent then
+            local pos = StickyTarget.Position
+            hrp.CFrame = CFrame.new(hrp.Position, Vector3.new(pos.X, hrp.Position.Y, pos.Z))
+                * CFrame.Angles(0, math.rad(180), 0)
+        end
+    elseif mode == "Side" then
+        if StickyTarget and StickyTarget.Parent then
+            local pos = StickyTarget.Position
+            hrp.CFrame = CFrame.new(hrp.Position, Vector3.new(pos.X, hrp.Position.Y, pos.Z))
+                * CFrame.Angles(0, math.rad(90), 0)
+        end
+    end
+end
+
+local VoidHideSavedCFrame = nil
+local VoidHideSpamConnection = nil
+local VoidHideLastTeleport = 0
+local VOID_SPAM_INTERVAL = 0.1
+
+local function VoidHideRandomOffset()
+    local s = function() return math.random() > 0.5 and 1 or -1 end
+    return Vector3.new(
+        s() * math.random(100000, 200000),
+        math.random(100000, 200000),
+        s() * math.random(100000, 200000)
+    )
+end
+
+local function VoidHideTeleport()
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    if not VoidHideSavedCFrame then VoidHideSavedCFrame = hrp.CFrame end
+    hrp.Anchored = true
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
+    hrp.CFrame = CFrame.new(VoidHideSavedCFrame.Position + VoidHideRandomOffset())
+end
+
+local function VoidHideRestore()
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if hrp and VoidHideSavedCFrame then
+        hrp.CFrame = VoidHideSavedCFrame
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
+    end
+    if hrp then hrp.Anchored = false end
+    VoidHideSavedCFrame = nil
+end
+
+local function VoidHideStartSpam()
+    if VoidHideSpamConnection then return end
+    VoidHideLastTeleport = 0
+    VoidHideSpamConnection = RunService.Heartbeat:Connect(function()
+        if Killed then return end
+        local now = tick()
+        if now - VoidHideLastTeleport >= VOID_SPAM_INTERVAL then
+            VoidHideLastTeleport = now
+            VoidHideTeleport()
+        end
+    end)
+end
+
+local function VoidHideStopSpam()
+    if VoidHideSpamConnection then
+        VoidHideSpamConnection:Disconnect()
+        VoidHideSpamConnection = nil
+    end
+end
+
+VoidHideGroup:AddToggle("VoidHideEnabled", {
+    Text = "voidhide", Default = false,
+    Tooltip = "teleports you into the void — press again to come back",
+    Callback = function(v)
+        if v then
+            VoidHideTeleport()
+            if Toggles.VoidHideSpam and Toggles.VoidHideSpam.Value then
+                VoidHideStartSpam()
+            end
+        else
+            VoidHideStopSpam()
+            VoidHideRestore()
+        end
+    end,
+}):AddKeyPicker("VoidHideKey", {
+    Default = "None", Mode = "Toggle", Modes = {"Always","Toggle","Hold"},
+    Text = "voidhide", SyncToggleState = true, NoUI = false,
+})
+
+VoidHideGroup:AddToggle("VoidHideSpam", {
+    Text = "spam teleport", Default = false,
+    Tooltip = "keeps re-teleporting you to new random void spots",
+})
+
+Toggles.VoidHideSpam:OnChanged(function()
+    if not (Toggles.VoidHideEnabled and Toggles.VoidHideEnabled.Value) then return end
+    if Toggles.VoidHideSpam.Value then VoidHideStartSpam() else VoidHideStopSpam() end
+end)
+
+LocalPlayer.CharacterAdded:Connect(function()
+    if Killed then return end
+    if not (Toggles.VoidHideEnabled and Toggles.VoidHideEnabled.Value) then return end
+    VoidHideSavedCFrame = nil
+    task.defer(function()
+        task.wait(0.15)
+        VoidHideTeleport()
+    end)
+end)
+
+local SemiDesyncEnabled = false
+local SemiDesyncInitConn = nil
+local SemiDesyncRoot = nil
+local SEMI_VEL_MAX = (128 ^ 2)
+local SEMI_TIME_RELEASE = 0.015
+local SEMI_FALLBACK_CHOKE = 0.105
+
+local statPing = Stats.PerformanceStats.Ping
+
+local function GetPingSeconds()
+    local ok, val = pcall(function() return statPing:GetValue() end)
+    if ok and type(val) == "number" and val > 0 then
+        return math.ceil(val) / 1000
+    end
+    return SEMI_FALLBACK_CHOKE
+end
+
+local function SemiSleep()
+    if Killed then return end
+    if not SemiDesyncRoot or not SemiDesyncRoot.Parent then return end
+    pcall(function() sethiddenproperty(SemiDesyncRoot, "NetworkIsSleeping", true) end)
+end
+
+local function SemiInitTick()
+    if Killed then return end
+    if not SemiDesyncRoot or not SemiDesyncRoot.Parent then return end
+    local root = SemiDesyncRoot
+    local rootVel = root.Velocity
+    local rootAng = math.random(-180, 180)
+    local X = math.random(-SEMI_VEL_MAX, SEMI_VEL_MAX)
+    local Y = math.random(0, SEMI_VEL_MAX)
+    local Z = math.random(-SEMI_VEL_MAX, SEMI_VEL_MAX)
+    root.CFrame = root.CFrame * CFrame.Angles(0, math.rad(rootAng), 0)
+    root.Velocity = Vector3.new(X, -Y, Z)
+    RunService.RenderStepped:Wait()
+    root.CFrame = root.CFrame * CFrame.Angles(0, math.rad(-rootAng), 0)
+    root.Velocity = rootVel
+end
+
+local function SemiChokeLoop()
+    while SemiDesyncEnabled and not Killed do
+        local a = RunService.Heartbeat:Connect(SemiSleep)
+        local b = RunService.RenderStepped:Connect(SemiSleep)
+        task.wait(GetPingSeconds())
+        a:Disconnect()
+        b:Disconnect()
+        task.wait(SEMI_TIME_RELEASE)
+    end
+end
+
+local function SemiDesyncStart()
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then
+        task.defer(function()
+            local c = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+            SemiDesyncRoot = c:WaitForChild("HumanoidRootPart", 5)
+        end)
+    else
+        SemiDesyncRoot = hrp
+    end
+    if SemiDesyncInitConn then SemiDesyncInitConn:Disconnect() end
+    SemiDesyncInitConn = RunService.Heartbeat:Connect(SemiInitTick)
+    task.spawn(SemiChokeLoop)
+end
+
+local function SemiDesyncStop()
+    SemiDesyncEnabled = false
+    if SemiDesyncInitConn then SemiDesyncInitConn:Disconnect() SemiDesyncInitConn = nil end
+    if SemiDesyncRoot and SemiDesyncRoot.Parent then
+        pcall(function() sethiddenproperty(SemiDesyncRoot, "NetworkIsSleeping", false) end)
+    end
+    SemiDesyncRoot = nil
+end
+
+DesyncGroup:AddToggle("SemiDesyncEnabled", {
+    Text = "semi desync voidfalls", Default = false,
+    Tooltip = "network-sleep replication choke",
+    Callback = function(v)
+        SemiDesyncEnabled = v
+        if v then SemiDesyncStart() else SemiDesyncStop() end
+    end,
+}):AddKeyPicker("SemiDesyncKey", {
+    Default = "None", Mode = "Toggle", Modes = {"Always","Toggle","Hold"},
+    Text = "semi desync voidfalls", SyncToggleState = true, NoUI = false,
+})
+
+DesyncGroup:AddSlider("SemiDesyncRelease", {
+    Text = "release time", Default = 15, Min = 1, Max = 200, Rounding = 0, Suffix = " ms",
+    Callback = function(v) SEMI_TIME_RELEASE = math.max(1, v) / 1000 end,
+})
+
+DesyncGroup:AddSlider("SemiDesyncFallbackChoke", {
+    Text = "fallback choke time", Default = 105, Min = 10, Max = 500, Rounding = 0, Suffix = " ms",
+    Callback = function(v) SEMI_FALLBACK_CHOKE = math.max(10, v) / 1000 end,
+})
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    if Killed then return end
+    if not SemiDesyncEnabled then return end
+    task.defer(function()
+        SemiDesyncRoot = char:WaitForChild("HumanoidRootPart", 5)
+    end)
+end)
+
+local ANIMATIONS = {
+    idle = "rbxassetid://616158929",
+    walk = "rbxassetid://616168032",
+    run  = "rbxassetid://616163682",
+    jump = "rbxassetid://656117878",
+    fall = "rbxassetid://656115606",
+}
+
+local AnimationEnabled = false
+local OriginalAnimationIds = {}
+
+local function CaptureOriginalAnimations(animate)
+    if next(OriginalAnimationIds) ~= nil then return end
+    for animType, _ in pairs(ANIMATIONS) do
+        local folder = animate:FindFirstChild(animType)
+        if folder then
+            for _, child in ipairs(folder:GetChildren()) do
+                if child:IsA("Animation") then
+                    OriginalAnimationIds[child] = child.AnimationId
+                end
+            end
+        end
+    end
+end
+
+local function ApplyAnimations(character)
+    if not character then return end
+    local animate = character:FindFirstChild("Animate") or character:WaitForChild("Animate", 5)
+    if not animate then return end
+    if AnimationEnabled then
+        CaptureOriginalAnimations(animate)
+        for animType, animId in pairs(ANIMATIONS) do
+            local folder = animate:FindFirstChild(animType)
+            if folder then
+                for _, child in ipairs(folder:GetChildren()) do
+                    if child:IsA("Animation") then child.AnimationId = animId end
+                end
+            end
+        end
+    else
+        for anim, originalId in pairs(OriginalAnimationIds) do
+            if anim and anim.Parent then anim.AnimationId = originalId end
+        end
+        OriginalAnimationIds = {}
+    end
+end
+
+AnimGroup:AddToggle("AnimationChangerEnabled", {
+    Text = "animation changer", Default = false,
+    Tooltip = "swaps your default animations to the R6 anim pack",
+    Callback = function(v)
+        AnimationEnabled = v
+        ApplyAnimations(LocalPlayer.Character)
+    end,
+})
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    if Killed then return end
+    if not AnimationEnabled then return end
+    task.defer(function()
+        task.wait(0.1)
+        ApplyAnimations(char)
+    end)
+end)
+
+local HeadlessEnabled = false
+local OriginalHeadTransparency = nil
+local OriginalDecalTransparencies = {}
+
+local function ApplyHeadless(character)
+    if not character then return end
+    local head = character:FindFirstChild("Head") or character:WaitForChild("Head", 5)
+    if not head then return end
+    if HeadlessEnabled then
+        if OriginalHeadTransparency == nil then
+            OriginalHeadTransparency = head.Transparency
+        end
+        head.Transparency = 1
+        head.CanCollide = false
+        for _, part in ipairs(head:GetChildren()) do
+            if part:IsA("Decal") or part:IsA("Texture") then
+                if OriginalDecalTransparencies[part] == nil then
+                    OriginalDecalTransparencies[part] = part.Transparency
+                end
+                part.Transparency = 1
+            end
+        end
+    else
+        if OriginalHeadTransparency ~= nil then
+            head.Transparency = OriginalHeadTransparency
+            OriginalHeadTransparency = nil
+        end
+        head.CanCollide = true
+        for part, original in pairs(OriginalDecalTransparencies) do
+            if part and part.Parent then part.Transparency = original end
+        end
+        OriginalDecalTransparencies = {}
+    end
+end
+
+AnimGroup:AddToggle("HeadlessEnabled", {
+    Text = "headless", Default = false,
+    Tooltip = "hides your head and face",
+    Callback = function(v)
+        HeadlessEnabled = v
+        ApplyHeadless(LocalPlayer.Character)
+    end,
+})
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    if Killed then return end
+    if not HeadlessEnabled then return end
+    task.defer(function()
+        task.wait(0.1)
+        ApplyHeadless(char)
+    end)
+end)
+
+local AppearanceState = {
+    enabled = false,
+    userId = 5683146469,
+}
+
+local function ApplyAppearance(targetUserId)
+    local character = LocalPlayer.Character
+    if not character then return end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return end
+
+    local success, description = pcall(function()
+        return Players:GetHumanoidDescriptionFromUserIdAsync(targetUserId)
+    end)
+
+    if success and description then
+        pcall(function()
+            if humanoid.ApplyDescriptionClientServer then
+                humanoid:ApplyDescriptionClientServer(description)
+            else
+                humanoid:ApplyDescription(description)
+            end
+        end)
+    end
+
+    local ok2, appearance = pcall(function()
+        return Players:GetCharacterAppearanceAsync(targetUserId)
+    end)
+
+    if not ok2 or not appearance then return end
+
+    for _, v in ipairs(character:GetChildren()) do
+        if v:IsA("Shirt")
+            or v:IsA("Pants")
+            or v:IsA("ShirtGraphic")
+            or v:IsA("Accessory") then
+            v:Destroy()
+        end
+    end
+
+    for _, v in ipairs(appearance:GetChildren()) do
+        if v:IsA("Shirt") or v:IsA("Pants") or v:IsA("ShirtGraphic") then
+            v:Clone().Parent = character
+        end
+    end
+
+    for _, v in ipairs(appearance:GetChildren()) do
+        if v:IsA("Accessory") then
+            pcall(function()
+                humanoid:AddAccessory(v:Clone())
+            end)
+        end
+    end
+
+    local head = character:FindFirstChild("Head")
+    if head and appearance:FindFirstChild("face") then
+        local oldFace = head:FindFirstChild("face")
+        if oldFace then oldFace:Destroy() end
+        appearance.face:Clone().Parent = head
+    end
+
+    appearance:Destroy()
+end
+
+local function RunCharSwap()
+    local uid = AppearanceState.userId
+    task.spawn(function()
+        task.wait(0.1)
+        ApplyAppearance(uid)
+    end)
+end
+
+AnimGroup:AddInput("CharUserId", {
+    Text = "user id",
+    Default = "5683146469",
+    Numeric = true,
+    Finished = true,
+    Callback = function(v)
+        local n = tonumber(v)
+        if n then AppearanceState.userId = n end
+    end,
+})
+
+AnimGroup:AddToggle("CharEnabled", {
+    Text = "char",
+    Default = false,
+    Tooltip = "applies the chosen avatar to your character",
+    Callback = function(v)
+        AppearanceState.enabled = v
+        if v then RunCharSwap() end
+    end,
+})
+
+LocalPlayer.CharacterAdded:Connect(function()
+    if Killed then return end
+    if not AppearanceState.enabled then return end
+    task.defer(function()
+        task.wait(1)
+        RunCharSwap()
+    end)
+end)
+
+local CameraFovEnabled = false
+local CameraFovValue = 70
+local ThirdPersonEnabled = false
+local ThirdPersonDistance = 12
+local ThirdPersonWantedActive = false
+
+CameraGroup:AddToggle("CameraFovEnabled", {
+    Text = "fov changer", Default = false,
+    Callback = function(v) CameraFovEnabled = v end,
+})
+
+CameraGroup:AddSlider("CameraFovValue", {
+    Text = "fov", Default = 70, Min = 1, Max = 120, Rounding = 0, Suffix = "",
+    Callback = function(v) CameraFovValue = v end,
+})
+
+CameraGroup:AddToggle("ThirdPersonEnabled", {
+    Text = "3rd person", Default = false,
+    Tooltip = "forces classic camera + zoom distance",
+    Callback = function(v)
+        ThirdPersonEnabled = v
+        if v then
+            ThirdPersonWantedActive = true
+        else
+            ThirdPersonWantedActive = false
+            pcall(function()
+                LocalPlayer.CameraMinZoomDistance = 0.5
+                LocalPlayer.CameraMaxZoomDistance = 128
+                LocalPlayer.CameraMode = Enum.CameraMode.Classic
+            end)
+        end
+    end,
+})
+
+CameraGroup:AddSlider("ThirdPersonDistance", {
+    Text = "3rd person distance", Default = 12, Min = 1, Max = 128, Rounding = 1, Suffix = "",
+    Callback = function(v) ThirdPersonDistance = v end,
+})
+
+uis.JumpRequest:Connect(function()
+    if Killed then return end
+    if Toggles.InfJumpEnabled and Toggles.InfJumpEnabled.Value then
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+    end
+end)
+
+-- noclip loop — applies CanCollide = false AND collision group each step.
+-- The group survives Prison Life's CanCollide reset; the hook installed
+-- at load stops the reset entirely where hookfunction is available.
+RunService.Stepped:Connect(function()
+    if Killed then return end
+    if Toggles.NoclipEnabled and Toggles.NoclipEnabled.Value then
+        local character = LocalPlayer.Character
+        if character then
+            for _, part in ipairs(character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = false
+                    pcall(function() part.CollisionGroup = NOCLIP_GROUP end)
+                end
+            end
+        end
+    end
+end)
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    if Killed then return end
+    if Toggles.NoclipEnabled and Toggles.NoclipEnabled.Value then
+        task.defer(function()
+            task.wait(0.1)
+            ApplyNoclipToCharacter(char)
+        end)
+    end
+end)
+
+local walkSpeedGuardConnection = nil
+local boundHumanoid = nil
+
+local function GetSpeedMode()
+    local mode = Options.SpeedwalkMode and Options.SpeedwalkMode.Value
+    return mode == "cframe" and "cframe" or "slippery"
+end
+
+local function GetConfiguredSpeed()
+    return math.max(1, Options.WalkSpeedValue and Options.WalkSpeedValue.Value or 100)
+end
+
+local function ApplySlipperySpeed(hum)
+    if not hum or not hum.Parent then return end
+
+    if Toggles.NoSlowdownEnabled and Toggles.NoSlowdownEnabled.Value then
+        if hum.WalkSpeed < 16 then
+            hum.WalkSpeed = 16
+        end
+    end
+
+    if not (Toggles.SpeedwalkEnabled and Toggles.SpeedwalkEnabled.Value) then return end
+    if GetSpeedMode() ~= "slippery" then return end
+    local target = GetConfiguredSpeed()
+    if hum.WalkSpeed ~= target then hum.WalkSpeed = target end
+end
+
+local function BindWalkSpeedGuard(char)
+    if walkSpeedGuardConnection then
+        walkSpeedGuardConnection:Disconnect()
+        walkSpeedGuardConnection = nil
+    end
+    boundHumanoid = char and char:FindFirstChildOfClass("Humanoid")
+    if not boundHumanoid then return end
+    ApplySlipperySpeed(boundHumanoid)
+    walkSpeedGuardConnection = boundHumanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+        if Killed then return end
+        ApplySlipperySpeed(boundHumanoid)
+    end)
+end
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    if Killed then return end
+    task.defer(function() BindWalkSpeedGuard(char) end)
+end)
+
+if LocalPlayer.Character then BindWalkSpeedGuard(LocalPlayer.Character) end
+
+RunService:BindToRenderStep(
+    "UnnamedEnchantmentsSpeedwalk",
+    Enum.RenderPriority.Character.Value + 1,
+    function(dt)
+        if Killed then return end
+        if not (Toggles.SpeedwalkEnabled and Toggles.SpeedwalkEnabled.Value) then return end
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local cam = ws.CurrentCamera
+        if not hum or not hrp or not cam then return end
+        local mode = GetSpeedMode()
+        local speed = GetConfiguredSpeed()
+        if mode == "slippery" then
+            ApplySlipperySpeed(hum)
+            return
+        end
+        hum.WalkSpeed = math.max(hum.WalkSpeed, 16)
+        local moveDir = hum.MoveDirection
+        if moveDir.Magnitude <= 0.001 then
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            return
+        end
+        local horizontal = Vector3.new(moveDir.X, 0, moveDir.Z)
+        if horizontal.Magnitude <= 0.001 then
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            return
+        end
+        horizontal = horizontal.Unit
+        local step = horizontal * speed * math.max(dt, 1 / 240)
+        hrp.CFrame = hrp.CFrame + step
+        hrp.AssemblyLinearVelocity = Vector3.zero
+    end
+)
+
+RunService.Heartbeat:Connect(function()
+    if Killed then return end
+    if not (Toggles.SpeedwalkEnabled and Toggles.SpeedwalkEnabled.Value) then return end
+    if GetSpeedMode() ~= "slippery" then return end
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    ApplySlipperySpeed(hum)
+end)
+
+RunService:BindToRenderStep(
+    "UnnamedEnchantmentsFlight",
+    Enum.RenderPriority.Character.Value + 2,
+    function(dt)
+        if Killed then return end
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        local cam = ws.CurrentCamera
+        if not (Toggles.FlyEnabled and Toggles.FlyEnabled.Value and hrp and hum and cam) then
+            if hum then hum.AutoRotate = true end
+            return
+        end
+        local moveDir = Vector3.zero
+        local camCF = cam.CFrame
+        local forward = camCF.LookVector
+        local right = camCF.RightVector
+        if uis:IsKeyDown(Enum.KeyCode.W) then moveDir += forward end
+        if uis:IsKeyDown(Enum.KeyCode.S) then moveDir -= forward end
+        if uis:IsKeyDown(Enum.KeyCode.A) then moveDir -= right end
+        if uis:IsKeyDown(Enum.KeyCode.D) then moveDir += right end
+        if uis:IsKeyDown(Enum.KeyCode.Space) then moveDir += Vector3.new(0, 1, 0) end
+        if uis:IsKeyDown(Enum.KeyCode.LeftShift) then moveDir -= Vector3.new(0, 1, 0) end
+        local speed = Options.FlySpeed and Options.FlySpeed.Value or 100
+        if moveDir.Magnitude > 0 then
+            hrp.CFrame = hrp.CFrame + moveDir.Unit * speed * math.max(dt, 1 / 240)
+        end
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hum.PlatformStand = false
+        hum.AutoRotate = false
+    end
+)
+
+RunService.Heartbeat:Connect(function()
+    if Killed then return end
+    local cam = ws.CurrentCamera
+    if not cam then return end
+    if CameraFovEnabled then
+        if math.abs(cam.FieldOfView - CameraFovValue) > 0.01 then
+            pcall(function() cam.FieldOfView = CameraFovValue end)
+        end
+    end
+    if ThirdPersonWantedActive then
+        pcall(function()
+            if LocalPlayer.CameraMode ~= Enum.CameraMode.Classic then
+                LocalPlayer.CameraMode = Enum.CameraMode.Classic
+            end
+            if LocalPlayer.CameraMinZoomDistance ~= ThirdPersonDistance then
+                LocalPlayer.CameraMinZoomDistance = ThirdPersonDistance
+            end
+            if LocalPlayer.CameraMaxZoomDistance ~= ThirdPersonDistance then
+                LocalPlayer.CameraMaxZoomDistance = ThirdPersonDistance
+            end
+            if cam.CameraType ~= Enum.CameraType.Custom then
+                cam.CameraType = Enum.CameraType.Custom
+            end
+        end)
+    end
+end)
+
+Toggles.CameraFovEnabled:OnChanged(function()
+    if not Toggles.CameraFovEnabled.Value then
+        local cam = ws.CurrentCamera
+        if cam then pcall(function() cam.FieldOfView = 70 end) end
+    end
+end)
+
+local StrafeAngle = 0
+
+local function GetStrafeTarget()
+    local myHrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not myHrp then return nil end
+    local teamCheck = Toggles.StrafeTeamCheck and Toggles.StrafeTeamCheck.Value
+    local mode = Options.StrafeTargetMode and Options.StrafeTargetMode.Value or "closest"
+
+    if mode == "silent aim" then
+        if CurrentSilentAimChar and CurrentSilentAimChar.Parent then
+            local hrp = CurrentSilentAimChar:FindFirstChild("HumanoidRootPart")
+            local hum = CurrentSilentAimChar:FindFirstChildOfClass("Humanoid")
+            if hrp and hum and hum.Health > 0 then
+                if not (teamCheck and CurrentSilentAimPlayer and CurrentSilentAimPlayer.Team
+                    and LocalPlayer.Team and CurrentSilentAimPlayer.Team == LocalPlayer.Team) then
+                    return hrp
+                end
+            end
+        end
+        return nil
+    end
+
+    if mode == "aimbot" then
+        if StickyTarget and StickyTarget.Parent then
+            local char = StickyTarget.Parent
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hrp and hum and hum.Health > 0 then
+                local plr = Players:GetPlayerFromCharacter(char)
+                if not (teamCheck and plr and plr.Team and LocalPlayer.Team
+                    and plr.Team == LocalPlayer.Team) then
+                    return hrp
+                end
+            end
+        end
+        return nil
+    end
+
+    local best = nil
+    local bestDist = math.huge
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer then continue end
+        local char = plr.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not hrp or not hum or hum.Health <= 0 then continue end
+        if teamCheck and plr.Team and LocalPlayer.Team and plr.Team == LocalPlayer.Team then
+            continue
+        end
+        local dist = (hrp.Position - myHrp.Position).Magnitude
+        if dist < bestDist then
+            bestDist = dist
+            best = hrp
+        end
+    end
+    return best
+end
+
+RunService:BindToRenderStep(
+    "UnnamedEnchantmentsStrafe",
+    Enum.RenderPriority.Character.Value + 3,
+    function(dt)
+        if Killed then return end
+        if not (Toggles.StrafeEnabled and Toggles.StrafeEnabled.Value) then return end
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not hrp or not hum then return end
+        local targetHrp = GetStrafeTarget()
+        if not targetHrp then return end
+        local strafeSpeed = Options.StrafeSpeed.Value or 2
+        local strafeDistance = Options.StrafeDistance.Value or 8
+        local strafeHeight = Options.StrafeHeight.Value or 0
+        StrafeAngle = StrafeAngle + strafeSpeed * dt
+        local targetPos = targetHrp.Position
+        local offset = Vector3.new(
+            math.cos(StrafeAngle) * strafeDistance,
+            strafeHeight,
+            math.sin(StrafeAngle) * strafeDistance
+        )
+        local goalPos = targetPos + offset
+        local lookAt = CFrame.new(goalPos, Vector3.new(targetPos.X, goalPos.Y, targetPos.Z))
+        hrp.CFrame = lookAt
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hum.PlatformStand = false
+        hum.AutoRotate = false
+    end
+)
+
+Toggles.StrafeEnabled:OnChanged(function()
+    if not Toggles.StrafeEnabled.Value then
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then hum.AutoRotate = true end
+        StrafeAngle = 0
+    end
+end)
+
+SilentAimGroup:AddToggle("SilentAimEnabled", {Text = "silent aim", Default = false}):AddKeyPicker("SilentAimKey", {
+    Default = "None", Mode = "Hold", Modes = {"Always","Toggle","Hold"},
+    Text = "silent aim", SyncToggleState = false, NoUI = false,
+})
+
+SilentAimGroup:AddToggle("SilentAimTeamCheck", {Text = "team check", Default = false})
+SilentAimGroup:AddToggle("SilentAimKnockCheck", {Text = "knock check", Default = false})
+SilentAimGroup:AddToggle("SilentAimWallCheck", {Text = "visible check", Default = false})
+SilentAimGroup:AddToggle("SilentAimIgnoreFov", {
+    Text = "ignore fov",
+    Default = false,
+    Tooltip = "once locked, stays locked even if the target leaves your screen",
+})
+SilentAimGroup:AddToggle("SilentAimSync", {
+    Text = "sync",
+    Default = false,
+    Tooltip = "silent aim mirrors your aimbot's target — silent aim does nothing without an aimbot lock",
+})
+SilentAimGroup:AddToggle("SilentAimDrawFov", {Text = "draw fov circle", Default = true})
+
+SilentAimGroup:AddToggle("SilentAimChamEnabled", {
+    Text = "cham",
+    Default = false,
+    Tooltip = "highlights whoever silent aim is locked on",
+    Callback = function(v) SilentAimChamEnabled = v end,
+})
+
+SilentAimGroup:AddLabel("cham color"):AddColorPicker("SilentAimChamColor", {
+    Default = Color3.fromRGB(219, 68, 103),
+    Callback = function(v) SilentAimChamColor = v end,
+})
+
+_G.SilentAimFovColor = Color3.fromRGB(255, 255, 255)
+
+SilentAimGroup:AddLabel("fov color"):AddColorPicker("FovColorPicker", {
+    Default = Color3.fromRGB(255, 255, 255),
+    Callback = function(v) _G.SilentAimFovColor = v end,
+})
+
+SilentAimGroup:AddSlider("SilentAimFov", {
+    Text = "fov", Default = 435, Min = 10, Max = 1200, Rounding = 0,
+})
+
+SilentAimGroup:AddToggle("SilentAimPrediction", {Text = "prediction", Default = false})
+
+local SAPredDeps = SilentAimGroup:AddDependencyBox()
+SAPredDeps:SetupDependencies({{Toggles.SilentAimPrediction, true}})
+
+SAPredDeps:AddSlider("SilentAimPredX", {
+    Text = "prediction x", Default = 1.0, Min = 0, Max = 20, Rounding = 1, Suffix = "",
+})
+
+SAPredDeps:AddSlider("SilentAimPredY", {
+    Text = "prediction y", Default = 1.0, Min = 0, Max = 20, Rounding = 1, Suffix = "",
+})
+
+SilentAimGroup:AddDropdown("SilentAimPart", {
+    Values = {"head", "uppertorso", "humanoidrootpart", "lowertorso"},
+    Default = 1, Multi = false, Text = "aim part",
+})
+
+TriggerGroup:AddToggle("TriggerEnabled", {Text = "triggerbot", Default = false})
+TriggerGroup:AddToggle("TriggerTeamCheck", {Text = "team check", Default = false})
+TriggerGroup:AddToggle("TriggerVisibleCheck", {Text = "visible check", Default = false})
+TriggerGroup:AddSlider("TriggerDelay", {
+    Text = "delay", Default = 50, Min = 0, Max = 1000, Rounding = 0, Suffix = " ms",
+})
+
+local LastTriggerTarget = nil
+local TriggerHoverStart = 0
+
+RunService.RenderStepped:Connect(function()
+    if Killed then return end
+    if not (Toggles.TriggerEnabled and Toggles.TriggerEnabled.Value) then
+        LastTriggerTarget = nil
+        return
+    end
+    if uis:GetFocusedTextBox() ~= nil then
+        LastTriggerTarget = nil
+        return
+    end
+    local mouse = LocalPlayer:GetMouse()
+    local target = mouse.Target
+    local currentTargetChar = nil
+    if target and target.Parent then
+        local model = target:FindFirstAncestorOfClass("Model")
+        if model and model:FindFirstChildOfClass("Humanoid") then
+            local plr = Players:GetPlayerFromCharacter(model)
+            if plr and plr ~= LocalPlayer then
+                local sameTeam = Toggles.TriggerTeamCheck.Value and plr.Team
+                    and LocalPlayer.Team and plr.Team == LocalPlayer.Team
+                if not sameTeam then
+                    local hum = model:FindFirstChildOfClass("Humanoid")
+                    if hum and hum.Health > 0 then
+                        if Toggles.TriggerVisibleCheck.Value then
+                            if not Utils.isplayerbehindwall(plr) then
+                                currentTargetChar = model
+                            end
+                        else
+                            currentTargetChar = model
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if currentTargetChar then
+        if LastTriggerTarget ~= currentTargetChar then
+            LastTriggerTarget = currentTargetChar
+            TriggerHoverStart = tick()
+        else
+            local delaySec = (Options.TriggerDelay.Value or 50) / 1000
+            if tick() - TriggerHoverStart >= delaySec then
+                mouse1click()
+                TriggerHoverStart = tick()
+            end
+        end
+    else
+        LastTriggerTarget = nil
+    end
+end)
+
+local AimPart = "Head"
+local TeamCheck = false
+
+AimbotGroup:AddToggle("AimEnabled", {Text = "aimbot", Default = false}):AddKeyPicker("AimbotKey", {
+    Default = "None", Mode = "Hold", Modes = {"Always","Toggle","Hold"},
+    Text = "aimbot", SyncToggleState = false, NoUI = false,
+})
+
+AimbotGroup:AddToggle("TeamCheck", {
+    Text = "team check", Default = false,
+    Callback = function(value) TeamCheck = value end,
+})
+
+AimbotGroup:AddToggle("KnockCheck", {Text = "knock check", Default = false})
+AimbotGroup:AddToggle("UsePrediction", {Text = "prediction", Default = false})
+
+local PredictionDeps = AimbotGroup:AddDependencyBox()
+PredictionDeps:SetupDependencies({{Toggles.UsePrediction, true}})
+
+PredictionDeps:AddSlider("PredictionX", {
+    Text = "prediction x", Default = 1.0, Min = 0, Max = 20, Rounding = 1, Suffix = "",
+})
+
+PredictionDeps:AddSlider("PredictionY", {
+    Text = "prediction y", Default = 1.0, Min = 0, Max = 20, Rounding = 1, Suffix = "",
+})
+
+AimbotGroup:AddToggle("UseSmoothness", {Text = "smoothness", Default = false})
+
+local SmoothnessDeps = AimbotGroup:AddDependencyBox()
+SmoothnessDeps:SetupDependencies({{Toggles.UseSmoothness, true}})
+
+SmoothnessDeps:AddSlider("Smoothness", {
+    Text = "smoothness", Default = 10, Min = 1, Max = 100, Rounding = 2, Suffix = "",
+})
+
+AimbotGroup:AddDropdown("AimPart", {
+    Values = {"head", "humanoidrootpart", "uppertorso", "lowertorso"},
+    Default = 1, Multi = false, Text = "aim part",
+    Callback = function(value) AimPart = value end,
+})
+
+AimbotGroup:AddDivider()
+
+AimbotGroup:AddToggle("NoRecoilEnabled", {
+    Text = "no recoil",
+    Default = false,
+    Tooltip = "rejects the game's recoil camera rotation",
+    Callback = function(v) NoRecoilEnabled = v end,
+})
+
+local StompState = {
+    autoActive = false, autoTargetOnly = false,
+    autoLoop = nil, autoOriginalCFrame = nil, autoTeleported = false,
+    knockActive = false,
+}
+
+local function StompFire()
+    pcall(function() ReplicatedStorage.MainEvent:FireServer("Stomp") end)
+    pcall(function() ReplicatedStorage.MAINEVENT:FireServer("STOMP") end)
+end
+
+local function AutoStompStart()
+    if StompState.autoLoop then return end
+    StompState.autoLoop = RunService.Heartbeat:Connect(function()
+        if Killed then return end
+        if not StompState.autoActive then return end
+        if not Utils.hascharacter(LocalPlayer) then return end
+        local hrp = LocalPlayer.Character.HumanoidRootPart
+        if not StompState.autoTargetOnly then
+            StompFire()
+            return
+        end
+        if not (StickyTarget and StickyTarget.Parent) then
+            if StompState.autoTeleported and StompState.autoOriginalCFrame then
+                hrp.CFrame = StompState.autoOriginalCFrame
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                StompState.autoTeleported = false
+                StompState.autoOriginalCFrame = nil
+            end
+            return
+        end
+        local targetPlr = Players:GetPlayerFromCharacter(StickyTarget.Parent)
+        if not (targetPlr and (DaHood.isknocked(targetPlr) or DaHood.isdead(targetPlr))) then
+            if StompState.autoTeleported and StompState.autoOriginalCFrame then
+                hrp.CFrame = StompState.autoOriginalCFrame
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                StompState.autoTeleported = false
+                StompState.autoOriginalCFrame = nil
+            end
+            return
+        end
+        if not StompState.autoTeleported then
+            StompState.autoOriginalCFrame = hrp.CFrame
+            StompState.autoTeleported = true
+        end
+        local targetHrp = StickyTarget.Parent:FindFirstChild("HumanoidRootPart")
+        if targetHrp then
+            hrp.CFrame = targetHrp.CFrame
+            hrp.AssemblyLinearVelocity = Vector3.zero
+        end
+        StompFire()
+    end)
+end
+
+local function AutoStompStop()
+    if StompState.autoLoop then
+        StompState.autoLoop:Disconnect()
+        StompState.autoLoop = nil
+    end
+    if StompState.autoTeleported and StompState.autoOriginalCFrame and Utils.hascharacter(LocalPlayer) then
+        LocalPlayer.Character.HumanoidRootPart.CFrame = StompState.autoOriginalCFrame
+        LocalPlayer.Character.HumanoidRootPart.AssemblyLinearVelocity = Vector3.zero
+    end
+    StompState.autoTeleported = false
+    StompState.autoOriginalCFrame = nil
+end
+
+local function FindNearbyKnocked()
+    local char = LocalPlayer.Character
+    if not (char and char:FindFirstChild("HumanoidRootPart")) then return nil, nil end
+    for _, plr in pairs(Players:GetPlayers()) do
+        if plr == LocalPlayer then continue end
+        if not plr.Character then continue end
+        if DaHood.isdead(plr) then continue end
+        if not DaHood.isknocked(plr) then continue end
+        local m = ws:FindFirstChild(plr.Name)
+        if m and m:FindFirstChild("HB") then
+            return m.HB, plr
+        end
+        local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            return hrp, plr
+        end
+    end
+    return nil, nil
+end
+
+local function KnockStompLoop()
+    while StompState.knockActive and not Killed do
+        local char = LocalPlayer.Character
+        if char and char:FindFirstChild("HumanoidRootPart") then
+            local myHrp = char.HumanoidRootPart
+            local part, targetPlr = FindNearbyKnocked()
+
+            if part and targetPlr then
+                local original = myHrp.CFrame
+                while StompState.knockActive and DaHood.isknocked(targetPlr) and not Killed do
+                    if part and part.Parent then
+                        myHrp.CFrame = CFrame.new(part.Position.X, part.Position.Y, part.Position.Z)
+                        myHrp.AssemblyLinearVelocity = Vector3.zero
+                    end
+                    StompFire()
+                    task.wait(0.05)
+                end
+                myHrp.CFrame = original
+                myHrp.AssemblyLinearVelocity = Vector3.zero
+            end
+        end
+        task.wait(0.3)
+    end
+end
+
+StompGroup:AddToggle("AutoStompEnabled", {
+    Text = "auto stomp", Default = false,
+    Callback = function(v)
+        StompState.autoActive = v
+        if v then AutoStompStart() else AutoStompStop() end
+    end,
+}):AddKeyPicker("AutoStompKey", {
+    Default = "None", Mode = "Toggle", Modes = {"Always","Toggle","Hold"},
+    Text = "auto stomp", SyncToggleState = false, NoUI = false,
+})
+
+StompGroup:AddToggle("AutoStompTargetOnly", {
+    Text = "target only (tp mode)", Default = false,
+    Callback = function(v) StompState.autoTargetOnly = v end,
+})
+
+StompGroup:AddDivider()
+
+StompGroup:AddToggle("KnockStompEnabled", {
+    Text = "knock stomp", Default = false,
+    Callback = function(v)
+        StompState.knockActive = v
+        if v then task.spawn(KnockStompLoop) end
+    end,
+}):AddKeyPicker("KnockStompKey", {
+    Default = "None", Mode = "Toggle", Modes = {"Always","Toggle","Hold"},
+    Text = "knock stomp", SyncToggleState = false, NoUI = false,
+})
+
+EspGroup:AddToggle("EspEnabled", {Text = "enable esp", Default = false})
+
+EspGroup:AddSlider("EspMaxDistance", {
+    Text = "max distance", Default = 200, Min = 50, Max = 20000, Rounding = 0,
+})
+
+EspGroup:AddToggle("EspBox", {Text = "boxes", Default = false})
+EspGroup:AddToggle("EspBoxFill", {Text = "filled boxes", Default = false})
+EspGroup:AddToggle("EspCornerBoxes", {Text = "corner boxes", Default = false})
+
+EspGroup:AddLabel("box color"):AddColorPicker("BoxColorPicker", {
+    Default = EspBoxColor,
+    Callback = function(v) EspBoxColor = v end,
+})
+
+EspGroup:AddToggle("EspChams", {Text = "chams", Default = false})
+
+EspGroup:AddLabel("chams color"):AddColorPicker("ChamsColorPicker", {
+    Default = EspChamsColor,
+    Callback = function(v) EspChamsColor = v end,
+})
+
+EspGroup:AddToggle("EspName", {Text = "names", Default = false})
+
+EspGroup:AddLabel("name color"):AddColorPicker("NameColorPicker", {
+    Default = EspNameColor,
+    Callback = function(v) EspNameColor = v end,
+})
+
+EspGroup:AddToggle("EspHealth", {Text = "healthbar", Default = false})
+
+EspGroup:AddLabel("health bar color"):AddColorPicker("HealthColorPicker", {
+    Default = EspHealthColor,
+    Callback = function(v) EspHealthColor = v end,
+})
+
+EspGroup:AddToggle("EspHealthText", {Text = "health text", Default = false})
+
+EspGroup:AddLabel("health text color"):AddColorPicker("HealthTextColorPicker", {
+    Default = EspHealthTextColor,
+    Callback = function(v) EspHealthTextColor = v end,
+})
+
+EspGroup:AddToggle("EspSkeleton", {Text = "skeleton", Default = false})
+
+EspGroup:AddLabel("skeleton color"):AddColorPicker("SkeletonColorPicker", {
+    Default = EspSkeletonColor,
+    Callback = function(v) EspSkeletonColor = v end,
+})
+
+EspGroup:AddToggle("EspDistance", {Text = "distance", Default = false})
+
+EspGroup:AddLabel("distance color"):AddColorPicker("DistanceColorPicker", {
+    Default = EspDistanceColor,
+    Callback = function(v) EspDistanceColor = v end,
+})
+
+HudGroup:AddToggle("HudKeybinds", {Text = "keybind list", Default = false})
+
+HudGroup:AddToggle("ShowMessages", {
+    Text = "show messages", Default = false,
+    Tooltip = "forces chat ui to show when disabled",
+    Callback = function(Value)
+        pcall(function()
+            StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Chat, Value)
+        end)
+        pcall(function()
+            if TextChatService.ChatWindowConfiguration then
+                TextChatService.ChatWindowConfiguration.Enabled = Value
+            end
+        end)
+    end,
+})
+
+HudColorGroup:AddLabel("keybind list color"):AddColorPicker("KeybindColorPicker", {
+    Default = HudKeybindColor,
+    Callback = function(v) HudKeybindColor = v end,
+})
+
+local WorldEnabled = false
+local WorldBrightness = 2
+local WorldClockTime = 14
+local WorldFogStart = 0
+local WorldFogEnd = 100000
+local WorldExposure = 0
+local NoFogEnabled = false
+local NoShadowsEnabled = false
+
+WorldLightGroup:AddToggle("WorldEnabled", {
+    Text = "lighting override", Default = false,
+    Callback = function(v) WorldEnabled = v end,
+})
+
+WorldLightGroup:AddSlider("WorldBrightness", {
+    Text = "brightness", Default = 2, Min = 0, Max = 5, Rounding = 1,
+    Callback = function(v) WorldBrightness = v end,
+})
+
+WorldLightGroup:AddSlider("WorldClockTime", {
+    Text = "clock time", Default = 14, Min = 0, Max = 24, Rounding = 1,
+    Callback = function(v) WorldClockTime = v end,
+})
+
+WorldLightGroup:AddSlider("WorldFogStart", {
+    Text = "fog start", Default = 0, Min = 0, Max = 5000, Rounding = 0,
+    Callback = function(v) WorldFogStart = v end,
+})
+
+WorldLightGroup:AddSlider("WorldFogEnd", {
+    Text = "fog end", Default = 100000, Min = 0, Max = 100000, Rounding = 0,
+    Callback = function(v) WorldFogEnd = v end,
+})
+
+WorldLightGroup:AddSlider("WorldExposure", {
+    Text = "exposure", Default = 0, Min = -3, Max = 3, Rounding = 1,
+    Callback = function(v) WorldExposure = v end,
+})
+
+WorldLightGroup:AddToggle("NoFogEnabled", {
+    Text = "no fog", Default = false,
+    Callback = function(v) NoFogEnabled = v end,
+})
+
+WorldLightGroup:AddToggle("NoShadowsEnabled", {
+    Text = "no shadows", Default = false,
+    Callback = function(v)
+        NoShadowsEnabled = v
+        pcall(function() Lighting.GlobalShadows = not v end)
+    end,
+})
+
+WorldColorGroup:AddLabel("ambient color"):AddColorPicker("WorldAmbientPicker", {
+    Default = WorldAmbientColor,
+    Callback = function(v) WorldAmbientColor = v end,
+})
+
+WorldColorGroup:AddLabel("outdoor ambient"):AddColorPicker("WorldOutdoorAmbientPicker", {
+    Default = WorldOutdoorAmbient,
+    Callback = function(v) WorldOutdoorAmbient = v end,
+})
+
+WorldColorGroup:AddLabel("fog color"):AddColorPicker("WorldFogColorPicker", {
+    Default = WorldFogColorPick,
+    Callback = function(v) WorldFogColorPick = v end,
+})
+
+local GunShopItems = {
+    "[Shotgun]","[Silencer]","[Tactical Shotgun]","[Double-Barrel SG]","[Revolver]",
+    "[SMG]","[P90]","[AK47]","[AR]","[SilencerAR]","[LMG]","[Flamethrower]",
+    "[DrumGun]","[Aug]","[Drum]","[USP]","[Glock]","[Knife]","[Bat]","[Katana]",
+    "[Machete]","[Medkit]","[Radio]","[Boombox]","[Flashlight]",
+}
+
+local ArmorShopItems = {"[High-Medium Armor]","[Medium Armor]","[High Armor]","[Light Armor]","[Armor]"}
+
+local AutoBuyState = {
+    isactive = false,
+    selecteditems = {},
+    armorthreshold = 70,
+    hasboughtthislife = false,
+    boughtitems = {},
+}
+
+local ShopCache = {locations = nil, lastUpdate = 0, updateInterval = 30}
+local ItemCache = {}
+
+local AutoBuy = {}
+
+AutoBuy.GetShopLocations = function(force)
+    local now = tick()
+    if not (force or not ShopCache.locations or (now - ShopCache.lastUpdate >= ShopCache.updateInterval)) then
+        return ShopCache.locations
+    end
+    local out = {}
+    local seen = {}
+    local names = {"Pads","Shops","BuyPads","Shop","Buy","Store","Dealers","GunDealer","GunShop","Items","Purchase"}
+    local MAP = ws:FindFirstChild("MAP")
+    if MAP then
+        for _, n in ipairs(names) do
+            local v = MAP:FindFirstChild(n)
+            if v and not seen[v] then table.insert(out, v) seen[v] = true end
+        end
+    end
+    for _, n in ipairs(names) do
+        local v = ws:FindFirstChild(n)
+        if v and not seen[v] then table.insert(out, v) seen[v] = true end
+    end
+    if #out == 0 then
+        for _, v in pairs(ws:GetChildren()) do
+            if (v:IsA("Folder") or v:IsA("Model")) and not seen[v] then
+                local ln = v.Name:lower()
+                if ln:find("pad") or ln:find("shop") or ln:find("buy") or ln:find("dealer") then
+                    table.insert(out, v)
+                    seen[v] = true
+                end
+            end
+        end
+    end
+    ShopCache.locations = out
+    ShopCache.lastUpdate = now
+    return out
+end
+
+AutoBuy.FindItem = function(name)
+    if ItemCache[name] then
+        local c = ItemCache[name]
+        if c.item and c.item.Parent and c.clickDetector and c.clickDetector.Parent then
+            return c.item, c.clickDetector
+        end
+        ItemCache[name] = nil
+    end
+    local locs = AutoBuy.GetShopLocations()
+    local stripped = name:gsub("%[", ""):gsub("%]", "")
+    for _, loc in ipairs(locs) do
+        local direct = loc:FindFirstChild(name)
+        if direct then
+            local cd = direct:FindFirstChildOfClass("ClickDetector")
+            if cd then
+                ItemCache[name] = {item = direct, clickDetector = cd}
+                return direct, cd
+            end
+        end
+        for _, child in pairs(loc:GetChildren()) do
+            if child.Name == name or child.Name:find(stripped) then
+                local cd = child:FindFirstChildOfClass("ClickDetector")
+                if cd then
+                    ItemCache[name] = {item = child, clickDetector = cd}
+                    return child, cd
+                end
+            end
+        end
+    end
+    return nil, nil
+end
+
+AutoBuy.HasItem = function(name)
+    local lp = name:lower()
+    local s1 = lp:gsub("%[", ""):gsub("%]", "")
+    local s2 = s1:gsub(" ", "")
+    local function scan(container)
+        for _, c in pairs(container:GetChildren()) do
+            if c:IsA("Tool") then
+                local n = c.Name:lower():gsub(" ", "")
+                if n:find(s2) or s2:find(n) then return true end
+            end
+        end
+        return false
+    end
+    if scan(LocalPlayer.Backpack) then return true end
+    if LocalPlayer.Character and scan(LocalPlayer.Character) then return true end
+    return false
+end
+
+AutoBuy.GetBackpackCount = function()
+    local n = 0
+    for _, c in pairs(LocalPlayer.Backpack:GetChildren()) do
+        if c:IsA("Tool") then n = n + 1 end
+    end
+    if LocalPlayer.Character then
+        for _, c in pairs(LocalPlayer.Character:GetChildren()) do
+            if c:IsA("Tool") then n = n + 1 end
+        end
+    end
+    return n
+end
+
+AutoBuy.BuyItem = function(cd)
+    if cd then return pcall(function() fireclickdetector(cd) end) end
+    return false
+end
+
+AutoBuy.BuyItemVerified = function(name, attempts)
+    attempts = attempts or 5
+    if AutoBuy.HasItem(name) then return true, "already_owned" end
+    local _, cd = AutoBuy.FindItem(name)
+    if not cd then return false, "not_found" end
+    local before = AutoBuy.GetBackpackCount()
+    for i = 1, attempts do
+        AutoBuy.BuyItem(cd)
+        task.wait(0.15)
+        if AutoBuy.HasItem(name) then return true, "purchased" end
+        if AutoBuy.GetBackpackCount() > before then return true, "purchased" end
+        if i < attempts then task.wait(0.1) end
+    end
+    return false, "failed"
+end
+
+AutoBuy.BuyArmor = function()
+    if DaHood.getarmor(LocalPlayer) < AutoBuyState.armorthreshold then
+        for _, name in ipairs(ArmorShopItems) do
+            local _, cd = AutoBuy.FindItem(name)
+            if cd then
+                local before = DaHood.getarmor(LocalPlayer)
+                for _ = 1, 3 do
+                    AutoBuy.BuyItem(cd)
+                    task.wait(0.15)
+                    if DaHood.getarmor(LocalPlayer) > before then return true end
+                end
+                return false
+            end
+        end
+    end
+    return false
+end
+
+AutoBuy.BuySelected = function()
+    if AutoBuyState.hasboughtthislife then return end
+    AutoBuyState.boughtitems = {}
+    task.spawn(function()
+        local bought, failed = 0, 0
+        local armorBefore = DaHood.getarmor(LocalPlayer)
+        if AutoBuy.BuyArmor() then
+            task.wait(0.2)
+            if DaHood.getarmor(LocalPlayer) > armorBefore then bought += 1 end
+        end
+        local list = {}
+        for k, v in pairs(AutoBuyState.selecteditems) do
+            if v and not AutoBuy.HasItem(k) then table.insert(list, k) end
+        end
+        for i, name in ipairs(list) do
+            if AutoBuyState.boughtitems[name] then continue end
+            local ok, why = AutoBuy.BuyItemVerified(name, 5)
+            if not ok then
+                failed += 1
+                warn("[AutoBuy] Failed to buy: " .. name .. " (" .. why .. ")")
+            else
+                AutoBuyState.boughtitems[name] = true
+                if why == "purchased" then bought += 1 end
+            end
+            if i < #list then task.wait(0.1) end
+        end
+        if bought > 0 or failed > 0 then
+            Library:Notify(string.format("Bought %d items, %d failed", bought, failed), 3)
+        end
+    end)
+    AutoBuyState.hasboughtthislife = true
+end
+
+AutoBuy.RefreshCache = function()
+    ShopCache.locations = nil
+    ItemCache = {}
+    AutoBuy.GetShopLocations(true)
+end
+
+LocalPlayer.CharacterAdded:Connect(function()
+    if Killed then return end
+    AutoBuyState.hasboughtthislife = false
+    AutoBuyState.boughtitems = {}
+    ItemCache = {}
+    task.wait(0.8)
+    if AutoBuyState.isactive then
+        task.wait(0.5)
+        AutoBuy.BuySelected()
+    end
+end)
+
+if LocalPlayer.Character then
+    AutoBuyState.hasboughtthislife = false
+    AutoBuyState.boughtitems = {}
+end
+
+AutoBuyGroup:AddToggle("AutoBuyEnabled", {
+    Text = "auto buy on respawn", Default = false,
+    Callback = function(v) AutoBuyState.isactive = v end,
+})
+
+AutoBuyGroup:AddSlider("AutoBuyArmorThreshold", {
+    Text = "armor threshold", Default = 70, Min = 30, Max = 130, Rounding = 0,
+    Callback = function(v) AutoBuyState.armorthreshold = v end,
+})
+
+AutoBuyGroup:AddDropdown("AutoBuyItems", {
+    Text = "items to buy",
+    Values = GunShopItems,
+    Multi = true,
+    Default = {},
+    AllowNull = true,
+    Callback = function(v) AutoBuyState.selecteditems = v end,
+})
+
+AutoBuyGroup:AddDivider()
+
+AutoBuyGroup:AddButton("Buy Selected Now", function()
+    AutoBuyState.hasboughtthislife = false
+    AutoBuy.BuySelected()
+end)
+
+AutoBuyGroup:AddButton("Refresh Shop Cache", function()
+    AutoBuy.RefreshCache()
+    Library:Notify("Shop cache refreshed", 2)
+end)
+
+local function IsKnocked(hum)
+    if not hum then return false end
+    local state = hum:GetState()
+    if state == Enum.HumanoidStateType.Physics then return true end
+    if state == Enum.HumanoidStateType.PlatformStanding then return true end
+    if hum.PlatformStand then return true end
+    if hum.Health <= 0 then return true end
+    return false
+end
+
+local PRED_SCALE = 0.01
+
+local function ApplyPrediction(part, predX, predY)
+    local vel = part.AssemblyLinearVelocity
+    return Vector3.new(
+        vel.X * predX * PRED_SCALE,
+        vel.Y * predY * PRED_SCALE,
+        vel.Z * predX * PRED_SCALE
+    )
+end
+
+RunService.RenderStepped:Connect(function(dt)
+    if Killed then return end
+    if not (Toggles.AimEnabled and Toggles.AimEnabled.Value and Options.AimbotKey:GetState()) then
+        StickyTarget = nil
+        return
+    end
+
+    Camera = ws.CurrentCamera
+    if not Camera then return end
+
+    local predictionOn = Toggles.UsePrediction.Value
+    local PredictionX = predictionOn and (Options.PredictionX.Value or 0) or 0
+    local PredictionY = predictionOn and (Options.PredictionY.Value or 0) or 0
+    local SmoothnessSlider = Toggles.UseSmoothness.Value and (Options.Smoothness.Value or 1) or 1
+    local baseAlpha = 1 / math.max(1, (SmoothnessSlider * 2) - 1)
+    local SmoothnessAlpha = 1 - (1 - baseAlpha) ^ (math.max(dt, 1 / 240) * 60)
+    if SmoothnessAlpha > 1 then SmoothnessAlpha = 1 end
+    local knockCheck = Toggles.KnockCheck.Value
+    local mousePos = uis:GetMouseLocation()
+
+    local function IsValidTarget(Part)
+        if not Part or not Part.Parent then return false end
+        local Character = Part.Parent
+        local Humanoid = Character:FindFirstChildOfClass("Humanoid")
+        if not Humanoid or Humanoid.Health <= 0 then return false end
+        local Player = Players:GetPlayerFromCharacter(Character)
+        if not Player or Player == LocalPlayer then return false end
+        if TeamCheck and Player.Team and LocalPlayer.Team and Player.Team == LocalPlayer.Team then
+            return false
+        end
+        if knockCheck and IsKnocked(Humanoid) then return false end
+        return true
+    end
+
+    if StickyTarget and not IsValidTarget(StickyTarget) then StickyTarget = nil end
+
+    if not StickyTarget then
+        local Best, BestDist = nil, math.huge
+        for _, Player in pairs(Players:GetPlayers()) do
+            if Player ~= LocalPlayer and Player.Character then
+                local Part = Player.Character:FindFirstChild(ResolveAimPart(AimPart))
+                if Part and IsValidTarget(Part) then
+                    local offset = ApplyPrediction(Part, PredictionX, PredictionY)
+                    local Vector, OnScreen = Camera:WorldToViewportPoint(Part.Position + offset)
+                    if OnScreen then
+                        local Dist = (Vector2.new(mousePos.X, mousePos.Y) - Vector2.new(Vector.X, Vector.Y)).Magnitude
+                        if Dist < BestDist then BestDist = Dist Best = Part end
+                    end
+                end
+            end
+        end
+        StickyTarget = Best
+    end
+
+    if StickyTarget then
+        local offset = ApplyPrediction(StickyTarget, PredictionX, PredictionY)
+        local TargetPos = StickyTarget.Position + offset
+        local currentCF = Camera.CFrame
+        local goalCF = CFrame.new(currentCF.Position, TargetPos)
+        suppressCameraWrite = true
+        Camera.CFrame = SmoothnessAlpha >= 1 and goalCF or currentCF:Lerp(goalCF, SmoothnessAlpha)
+        suppressCameraWrite = false
+        if NoRecoilEnabled then
+            lastCleanCF = Camera.CFrame
+        end
+    end
+end)
+
+RunService.RenderStepped:Connect(function()
+    if Killed or not NoRecoilEnabled then return end
+    if tick() - recoilLastFired > 0.05 then
+        local cam = ws.CurrentCamera
+        if cam then
+            lastCleanCF = cam.CFrame
+        end
+    end
+end)
+
+ThemeManager:SetLibrary(Library)
+ThemeManager:ApplyToTab(SettingsTab)
+
+SaveManager:SetLibrary(Library)
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetIgnoreIndexes({})
+SaveManager:SetFolder("UnnamedEnchantments")
+SaveManager:BuildConfigSection(SettingsTab)
+
+local EspGui = Instance.new("ScreenGui")
+EspGui.Name = "EspBoxGui"
+EspGui.IgnoreGuiInset = true
+EspGui.ResetOnSpawn = false
+EspGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+pcall(function() EspGui.Parent = game:GetService("CoreGui") end)
+if not EspGui.Parent then EspGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+
+local FovCircle = Instance.new("Frame")
+FovCircle.Name = "SilentAimFovCircle"
+FovCircle.BackgroundTransparency = 1
+FovCircle.AnchorPoint = Vector2.new(0.5, 0.5)
+FovCircle.Parent = EspGui
+
+local FovStroke = Instance.new("UIStroke")
+FovStroke.Thickness = 1.5
+FovStroke.Color = _G.SilentAimFovColor
+FovStroke.Transparency = 0.4
+FovStroke.Parent = FovCircle
+
+local FovCorner = Instance.new("UICorner")
+FovCorner.CornerRadius = UDim.new(1, 0)
+FovCorner.Parent = FovCircle
+
+local CachedTarget = nil
+
+local function IsKnockedSilent(hum)
+    if not hum then return false end
+    local state = hum:GetState()
+    if state == Enum.HumanoidStateType.Physics then return true end
+    if state == Enum.HumanoidStateType.PlatformStanding then return true end
+    if hum.PlatformStand then return true end
+    if hum.Health <= 0 then return true end
+    return false
+end
+
+local function SilentAimActive()
+    if Killed then return false end
+    if not (Toggles.SilentAimEnabled and Toggles.SilentAimEnabled.Value) then return false end
+    if Toggles.SilentAimSync and Toggles.SilentAimSync.Value then
+        return StickyTarget ~= nil
+    end
+    return Options.SilentAimKey:GetState()
+end
+
+local function ResolveSilentTarget()
+    local cam = ws.CurrentCamera
+    if not cam then return nil end
+    local mouse = LocalPlayer:GetMouse()
+    local mousePos = Vector2.new(mouse.X, mouse.Y)
+    local fov = Options.SilentAimFov.Value or 435
+    local partName = Options.SilentAimPart.Value or "head"
+    local teamCheck = Toggles.SilentAimTeamCheck.Value
+    local knockCheck = Toggles.SilentAimKnockCheck.Value
+    local wallCheck = Toggles.SilentAimWallCheck.Value
+    local predOn = Toggles.SilentAimPrediction.Value
+    local predX = predOn and (Options.SilentAimPredX.Value or 0) or 0
+    local predY = predOn and (Options.SilentAimPredY.Value or 0) or 0
+    local ignoreFov = Toggles.SilentAimIgnoreFov and Toggles.SilentAimIgnoreFov.Value
+    local sync = Toggles.SilentAimSync and Toggles.SilentAimSync.Value
+
+    if sync then
+        if not StickyTarget or not StickyTarget.Parent then
+            CurrentSilentAimChar = nil
+            CurrentSilentAimPlayer = nil
+            return nil
+        end
+
+        local char = StickyTarget.Parent
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        local part = char:FindFirstChild(ResolveAimPart(partName))
+        if not hum or not part or hum.Health <= 0 then
+            CurrentSilentAimChar = nil
+            CurrentSilentAimPlayer = nil
+            return nil
+        end
+
+        local plr = Players:GetPlayerFromCharacter(char)
+        if not plr or plr == LocalPlayer then
+            CurrentSilentAimChar = nil
+            CurrentSilentAimPlayer = nil
+            return nil
+        end
+
+        if teamCheck and plr.Team and LocalPlayer.Team and plr.Team == LocalPlayer.Team then
+            CurrentSilentAimChar = nil
+            CurrentSilentAimPlayer = nil
+            return nil
+        end
+        if knockCheck and IsKnockedSilent(hum) then
+            CurrentSilentAimChar = nil
+            CurrentSilentAimPlayer = nil
+            return nil
+        end
+
+        local vel = part.AssemblyLinearVelocity
+        local offset = Vector3.new(
+            vel.X * predX * PRED_SCALE,
+            vel.Y * predY * PRED_SCALE,
+            vel.Z * predX * PRED_SCALE
+        )
+
+        CurrentSilentAimChar = char
+        CurrentSilentAimPlayer = plr
+        return part.Position + offset
+    end
+
+    if ignoreFov and CurrentSilentAimChar and CurrentSilentAimChar.Parent then
+        local hum = CurrentSilentAimChar:FindFirstChildOfClass("Humanoid")
+        local part = CurrentSilentAimChar:FindFirstChild(ResolveAimPart(partName))
+        if hum and part and hum.Health > 0 then
+            local plr = Players:GetPlayerFromCharacter(CurrentSilentAimChar)
+            local valid = plr and plr ~= LocalPlayer
+
+            if valid and teamCheck and plr.Team and LocalPlayer.Team and plr.Team == LocalPlayer.Team then
+                valid = false
+            end
+            if valid and knockCheck and IsKnockedSilent(hum) then
+                valid = false
+            end
+            if valid and wallCheck then
+                local rp = RaycastParams.new()
+                rp.FilterType = Enum.RaycastFilterType.Exclude
+                rp.FilterDescendantsInstances = {LocalPlayer.Character}
+                local hit = ws:Raycast(cam.CFrame.Position, part.Position - cam.CFrame.Position, rp)
+                if hit and hit.Instance and not hit.Instance:IsDescendantOf(CurrentSilentAimChar) then
+                    valid = false
+                end
+            end
+
+            if valid then
+                local vel = part.AssemblyLinearVelocity
+                local offset = Vector3.new(
+                    vel.X * predX * PRED_SCALE,
+                    vel.Y * predY * PRED_SCALE,
+                    vel.Z * predX * PRED_SCALE
+                )
+                CurrentSilentAimPlayer = plr
+                return part.Position + offset
+            end
+        end
+        CurrentSilentAimChar = nil
+        CurrentSilentAimPlayer = nil
+    end
+
+    local best, bestDist, bestChar, bestPlayer = nil, math.huge, nil, nil
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character then
+            local char = plr.Character
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            local part = char:FindFirstChild(ResolveAimPart(partName))
+            if hum and part and hum.Health > 0 then
+                local pass = true
+                if teamCheck and plr.Team and LocalPlayer.Team and plr.Team == LocalPlayer.Team then
+                    pass = false
+                end
+                if knockCheck and IsKnockedSilent(hum) then pass = false end
+                if pass then
+                    local vel = part.AssemblyLinearVelocity
+                    local offset = Vector3.new(
+                        vel.X * predX * PRED_SCALE,
+                        vel.Y * predY * PRED_SCALE,
+                        vel.Z * predX * PRED_SCALE
+                    )
+                    local worldPos = part.Position + offset
+                    local screenPos, onScreen = cam:WorldToViewportPoint(worldPos)
+                    if onScreen and screenPos.Z > 0 then
+                        local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+                        if dist <= fov and dist < bestDist then
+                            if wallCheck then
+                                local rp = RaycastParams.new()
+                                rp.FilterType = Enum.RaycastFilterType.Exclude
+                                rp.FilterDescendantsInstances = {LocalPlayer.Character}
+                                local hit = ws:Raycast(cam.CFrame.Position, worldPos - cam.CFrame.Position, rp)
+                                if not hit or not hit.Instance or hit.Instance:IsDescendantOf(char) then
+                                    bestDist = dist best = worldPos bestChar = char bestPlayer = plr
+                                end
+                            else
+                                bestDist = dist best = worldPos bestChar = char bestPlayer = plr
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    CurrentSilentAimChar = bestChar
+    CurrentSilentAimPlayer = bestPlayer
+    return best
+end
+
+RunService.RenderStepped:Connect(function()
+    if Killed then return end
+    if SilentAimActive() then
+        CachedTarget = ResolveSilentTarget()
+    else
+        CachedTarget = nil
+        CurrentSilentAimChar = nil
+        CurrentSilentAimPlayer = nil
+    end
+    if Toggles.SilentAimEnabled and Toggles.SilentAimEnabled.Value
+        and Toggles.SilentAimDrawFov and Toggles.SilentAimDrawFov.Value then
+        local mouse = LocalPlayer:GetMouse()
+        local r = Options.SilentAimFov.Value
+        FovCircle.Size = UDim2.fromOffset(r * 2, r * 2)
+        FovCircle.Position = UDim2.fromOffset(mouse.X, mouse.Y)
+        FovStroke.Color = _G.SilentAimFovColor
+        FovCircle.Visible = true
+    else
+        FovCircle.Visible = false
+    end
+end)
+
+RunService.RenderStepped:Connect(function()
+    if Killed then return end
+
+    if not SilentAimChamEnabled or not CurrentSilentAimChar or not CurrentSilentAimChar.Parent then
+        if SilentAimCham then
+            SilentAimCham:Destroy()
+            SilentAimCham = nil
+        end
+        return
+    end
+
+    if not SilentAimCham or not SilentAimCham.Parent then
+        SilentAimCham = Instance.new("Highlight")
+        SilentAimCham.FillTransparency = 0.5
+        SilentAimCham.OutlineTransparency = 0
+        SilentAimCham.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        SilentAimCham.Parent = EspGui
+    end
+
+    SilentAimCham.Adornee = CurrentSilentAimChar
+    SilentAimCham.FillColor = SilentAimChamColor
+    SilentAimCham.OutlineColor = SilentAimChamColor
+    SilentAimCham.Enabled = true
+end)
+
+local MainEvent = game.ReplicatedStorage:WaitForChild("MAINEVENT", 10)
+if not MainEvent then warn("[lunar] mainevent not found") end
+
+if MainEvent then
+    local mt = getrawmetatable(game)
+    OriginalNamecall = mt.__namecall
+    setreadonly(mt, false)
+    mt.__namecall = newcclosure(function(self, ...)
+        if Killed then
+            return OriginalNamecall(self, ...)
+        end
+        local method = getnamecallmethod()
+        if self == MainEvent and method == "FireServer" then
+            local args = {...}
+            if type(args[1]) == "string" and args[1] == "MOUSE"
+                and typeof(args[2]) == "Vector3" and CachedTarget and SilentAimActive() then
+                args[2] = CachedTarget
+            end
+            return OriginalNamecall(self, table.unpack(args))
+        end
+        return OriginalNamecall(self, ...)
+    end)
+    setreadonly(mt, true)
+end
+
+local mtNR = getrawmetatable(game)
+OriginalNewIndex = mtNR.__newindex
+setreadonly(mtNR, false)
+mtNR.__newindex = newcclosure(function(self, key, value)
+    if Killed then
+        return OriginalNewIndex(self, key, value)
+    end
+    if NoRecoilEnabled
+        and not suppressCameraWrite
+        and key == "CFrame"
+        and typeof(value) == "CFrame"
+        and self == ws.CurrentCamera
+    then
+        local posDelta = (value.Position - lastCleanCF.Position).Magnitude
+        local lookDelta = math.acos(math.clamp(value.LookVector:Dot(lastCleanCF.LookVector), -1, 1))
+        if posDelta < 0.1 and lookDelta > 0.001 and lookDelta < 0.02 then
+            recoilLastFired = tick()
+            return OriginalNewIndex(self, key, lastCleanCF)
+        end
+    end
+    return OriginalNewIndex(self, key, value)
+end)
+setreadonly(mtNR, true)
+
+local EspFrames = {}
+local EspBoxFills = {}
+local EspCornerLines = {}
+local EspNames = {}
+local EspHealths = {}
+local EspHealthTexts = {}
+local EspSkeletons = {}
+local EspDists = {}
+local EspChams = {}
+
+local HudKeybindsContainer = nil
+local HudKeybindsText = nil
+
+local function RemoveAll(plr)
+    local function kill(tbl)
+        local v = tbl[plr]
+        if v and typeof(v) == "Instance" then v:Destroy() end
+        tbl[plr] = nil
+    end
+    kill(EspFrames) kill(EspBoxFills) kill(EspNames)
+    kill(EspHealthTexts) kill(EspDists) kill(EspChams)
+
+    local corners = EspCornerLines[plr]
+    if corners then
+        for _, line in ipairs(corners) do
+            if line and line.Parent then line:Destroy() end
+        end
+    end
+    EspCornerLines[plr] = nil
+
+    local h = EspHealths[plr]
+    if h then
+        if h.Bg then h.Bg:Destroy() end
+        if h.Fill then h.Fill:Destroy() end
+    end
+    EspHealths[plr] = nil
+
+    local s = EspSkeletons[plr]
+    if s then
+        for _, line in pairs(s) do
+            if line and typeof(line) == "Instance" then line:Destroy() end
+        end
+    end
+    EspSkeletons[plr] = nil
+end
+
+Players.PlayerRemoving:Connect(function(plr)
+    if Killed then return end
+    RemoveAll(plr)
+end)
+
+local function MakeSeg(parent)
+    local f = Instance.new("Frame")
+    f.BorderSizePixel = 0
+    f.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    f.Parent = parent
+    return f
+end
+
+local function SetHSeg(f, x, y, w, color, thickness)
+    f.AnchorPoint = Vector2.new(0, 0)
+    f.Position = UDim2.fromOffset(x, y)
+    f.Size = UDim2.fromOffset(w, thickness)
+    f.BackgroundColor3 = color
+    f.Visible = true
+end
+
+local function SetVSeg(f, x, y, h, color, thickness)
+    f.AnchorPoint = Vector2.new(0, 0)
+    f.Position = UDim2.fromOffset(x, y)
+    f.Size = UDim2.fromOffset(thickness, h)
+    f.BackgroundColor3 = color
+    f.Visible = true
+end
+
+local function MakeLine(parent)
+    local f = Instance.new("Frame")
+    f.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    f.BorderSizePixel = 0
+    f.AnchorPoint = Vector2.new(0.5, 0.5)
+    f.Parent = parent
+    return f
+end
+
+local function SetLine(line, x1, y1, x2, y2, color, thickness)
+    local dx, dy = x2 - x1, y2 - y1
+    local length = math.sqrt(dx * dx + dy * dy)
+    local angle = math.atan2(dy, dx)
+    local size = thickness or 2
+    line.AnchorPoint = Vector2.new(0.5, 0.5)
+    line.Position = UDim2.fromOffset((x1 + x2) / 2, (y1 + y2) / 2)
+    line.Size = UDim2.fromOffset(length, size)
+    line.Rotation = math.deg(angle)
+    line.BackgroundColor3 = color
+    line.Visible = true
+end
+
+local SkeletonPairs = {
+    {"Head", "UpperTorso"}, {"UpperTorso", "LowerTorso"},
+    {"UpperTorso", "LeftUpperArm"}, {"LeftUpperArm", "LeftLowerArm"}, {"LeftLowerArm", "LeftHand"},
+    {"UpperTorso", "RightUpperArm"}, {"RightUpperArm", "RightLowerArm"}, {"RightLowerArm", "RightHand"},
+    {"LowerTorso", "LeftUpperLeg"}, {"LeftUpperLeg", "LeftLowerLeg"}, {"LeftLowerLeg", "LeftFoot"},
+    {"LowerTorso", "RightUpperLeg"}, {"RightUpperLeg", "RightLowerLeg"}, {"RightLowerLeg", "RightFoot"},
+}
+
+local function HealthGradient(pct)
+    if pct >= 0.75 then return Color3.fromRGB(0, 255, 0)
+    elseif pct >= 0.5 then return Color3.fromRGB(255, 255, 0)
+    elseif pct >= 0.25 then return Color3.fromRGB(255, 170, 0)
+    else return Color3.fromRGB(255, 0, 0) end
+end
+
+local function EnsureKeybindList()
+    if HudKeybindsContainer then return end
+    local container = Instance.new("Frame")
+    container.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+    container.BackgroundTransparency = 0.25
+    container.BorderSizePixel = 0
+    container.Parent = EspGui
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 6)
+    corner.Parent = container
+    local stroke = Instance.new("UIStroke")
+    stroke.Thickness = 1
+    stroke.Color = Color3.fromRGB(60, 60, 70)
+    stroke.Parent = container
+    local lbl = Instance.new("TextLabel")
+    lbl.BackgroundTransparency = 1
+    lbl.TextStrokeTransparency = 0
+    lbl.TextSize = 13
+    lbl.Font = Enum.Font.SourceSansBold
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.TextYAlignment = Enum.TextYAlignment.Top
+    lbl.Size = UDim2.new(1, -16, 1, -12)
+    lbl.Position = UDim2.fromOffset(8, 6)
+    lbl.Parent = container
+    HudKeybindsContainer = container
+    HudKeybindsText = lbl
+end
+
+RunService.RenderStepped:Connect(function()
+    if Killed then return end
+    if not Toggles.EspEnabled.Value then
+        for plr, _ in pairs(EspFrames) do RemoveAll(plr) end
+        return
+    end
+
+    local cam = ws.CurrentCamera
+    if not cam then return end
+
+    local maxDist = Options.EspMaxDistance and Options.EspMaxDistance.Value or 200
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer then continue end
+        local char = plr.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local head = char and char:FindFirstChild("Head")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+        local visible = char and hrp and head and hum and hum.Health > 0
+        local topPos, botPos, height, width, posX, posY
+
+        if visible then
+            local camDist = (cam.CFrame.Position - hrp.Position).Magnitude
+            if camDist > maxDist then
+                visible = false
+            else
+                local tPos, tOn = cam:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
+                local bPos, bOn = cam:WorldToViewportPoint(hrp.Position - Vector3.new(0, 3, 0))
+                if not (tOn and bOn) or tPos.Z < 0 or bPos.Z < 0 then
+                    visible = false
+                else
+                    topPos, botPos = tPos, bPos
+                    height = math.abs(botPos.Y - topPos.Y)
+                    width = height * 0.6
+                    posX = topPos.X - width / 2
+                    posY = topPos.Y
+                end
+            end
+        end
+
+        if Toggles.EspChams.Value and visible then
+            if not EspChams[plr] then
+                local hl = Instance.new("Highlight")
+                hl.FillTransparency = 0.5
+                hl.OutlineTransparency = 0
+                hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                hl.Parent = EspGui
+                EspChams[plr] = hl
+            end
+            local hl = EspChams[plr]
+            hl.Adornee = char
+            hl.FillColor = EspChamsColor
+            hl.OutlineColor = EspChamsColor
+            hl.Enabled = true
+        elseif EspChams[plr] then
+            EspChams[plr].Enabled = false
+        end
+
+        if Toggles.EspBox.Value and visible then
+            if not EspFrames[plr] then
+                local frame = Instance.new("Frame")
+                frame.BackgroundTransparency = 1
+                frame.BorderSizePixel = 0
+                frame.Parent = EspGui
+                local stroke = Instance.new("UIStroke")
+                stroke.Thickness = 1
+                stroke.Color = EspBoxColor
+                stroke.Parent = frame
+                EspFrames[plr] = frame
+            end
+            local frame = EspFrames[plr]
+            frame.Size = UDim2.fromOffset(width, height)
+            frame.Position = UDim2.fromOffset(posX, posY)
+            frame.Visible = true
+            local stroke = frame:FindFirstChildOfClass("UIStroke")
+            if stroke then stroke.Color = EspBoxColor end
+        elseif EspFrames[plr] then
+            EspFrames[plr].Visible = false
+        end
+
+        if Toggles.EspBoxFill.Value and visible then
+            if not EspBoxFills[plr] then
+                local f = Instance.new("Frame")
+                f.BorderSizePixel = 0
+                f.BackgroundTransparency = 0.7
+                f.ZIndex = 0
+                f.Parent = EspGui
+                EspBoxFills[plr] = f
+            end
+            local f = EspBoxFills[plr]
+            f.Size = UDim2.fromOffset(width, height)
+            f.Position = UDim2.fromOffset(posX, posY)
+            f.BackgroundColor3 = EspBoxColor
+            f.Visible = true
+        elseif EspBoxFills[plr] then
+            EspBoxFills[plr].Visible = false
+        end
+
+        if Toggles.EspCornerBoxes.Value and visible then
+            if not EspCornerLines[plr] then
+                local tbl = {}
+                for i = 1, 8 do tbl[i] = MakeSeg(EspGui) end
+                EspCornerLines[plr] = tbl
+            end
+            local c = EspCornerLines[plr]
+            local seg = math.max(4, math.min(width, height) / 5)
+            local x1, y1 = posX, posY
+            local x2, y2 = posX + width, posY + height
+            local th = 1
+
+            SetHSeg(c[1], x1, y1, seg, EspBoxColor, th)
+            SetVSeg(c[2], x1, y1, seg, EspBoxColor, th)
+
+            SetHSeg(c[3], x2 - seg, y1, seg, EspBoxColor, th)
+            SetVSeg(c[4], x2 - th, y1, seg, EspBoxColor, th)
+
+            SetHSeg(c[5], x1, y2 - th, seg, EspBoxColor, th)
+            SetVSeg(c[6], x1, y2 - seg, seg, EspBoxColor, th)
+
+            SetHSeg(c[7], x2 - seg, y2 - th, seg, EspBoxColor, th)
+            SetVSeg(c[8], x2 - th, y2 - seg, seg, EspBoxColor, th)
+        elseif EspCornerLines[plr] then
+            for _, line in ipairs(EspCornerLines[plr]) do line.Visible = false end
+        end
+
+        if Toggles.EspName.Value and visible then
+            if not EspNames[plr] then
+                local lbl = Instance.new("TextLabel")
+                lbl.BackgroundTransparency = 1
+                lbl.TextStrokeTransparency = 0
+                lbl.TextSize = 14
+                lbl.Font = Enum.Font.SourceSansBold
+                lbl.Size = UDim2.fromOffset(150, 16)
+                lbl.Parent = EspGui
+                EspNames[plr] = lbl
+            end
+            local lbl = EspNames[plr]
+            lbl.Text = plr.Name
+            lbl.Position = UDim2.fromOffset(topPos.X - 75, topPos.Y - 18)
+            lbl.TextColor3 = EspNameColor
+            lbl.Visible = true
+        elseif EspNames[plr] then
+            EspNames[plr].Visible = false
+        end
+
+        if Toggles.EspHealth.Value and visible then
+            if not EspHealths[plr] then
+                local bg = Instance.new("Frame")
+                bg.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+                bg.BorderSizePixel = 0
+                bg.Parent = EspGui
+                local fill = Instance.new("Frame")
+                fill.BackgroundColor3 = EspHealthColor
+                fill.BorderSizePixel = 0
+                fill.Parent = bg
+                EspHealths[plr] = {Bg = bg, Fill = fill}
+            end
+            local h = EspHealths[plr]
+            local hpPct = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
+            local barH, barW = height, 3
+            local barX = posX - barW - 3
+            h.Bg.Size = UDim2.fromOffset(barW, barH)
+            h.Bg.Position = UDim2.fromOffset(barX, posY)
+            h.Bg.Visible = true
+            h.Fill.Size = UDim2.fromOffset(barW, barH * hpPct)
+            h.Fill.Position = UDim2.fromOffset(0, barH * (1 - hpPct))
+            h.Fill.BackgroundColor3 = HealthGradient(hpPct)
+            h.Fill.Visible = true
+        elseif EspHealths[plr] then
+            EspHealths[plr].Bg.Visible = false
+            EspHealths[plr].Fill.Visible = false
+        end
+
+        if Toggles.EspHealthText.Value and visible then
+            if not EspHealthTexts[plr] then
+                local lbl = Instance.new("TextLabel")
+                lbl.BackgroundTransparency = 1
+                lbl.TextStrokeTransparency = 0
+                lbl.TextSize = 12
+                lbl.Font = Enum.Font.SourceSansBold
+                lbl.Size = UDim2.fromOffset(60, 14)
+                lbl.Parent = EspGui
+                EspHealthTexts[plr] = lbl
+            end
+            local lbl = EspHealthTexts[plr]
+            lbl.Text = math.floor(hum.Health) .. " / " .. math.floor(hum.MaxHealth)
+            lbl.Position = UDim2.fromOffset(posX + width / 2 - 30, posY + height + 2)
+            lbl.TextColor3 = EspHealthTextColor
+            lbl.Visible = true
+        elseif EspHealthTexts[plr] then
+            EspHealthTexts[plr].Visible = false
+        end
+
+        if Toggles.EspDistance.Value and visible then
+            if not EspDists[plr] then
+                local lbl = Instance.new("TextLabel")
+                lbl.BackgroundTransparency = 1
+                lbl.TextStrokeTransparency = 0
+                lbl.TextSize = 12
+                lbl.Font = Enum.Font.SourceSans
+                lbl.Size = UDim2.fromOffset(150, 14)
+                lbl.Parent = EspGui
+                EspDists[plr] = lbl
+            end
+            local dist = math.floor((cam.CFrame.Position - hrp.Position).Magnitude)
+            local lbl = EspDists[plr]
+            lbl.Text = dist .. " studs"
+            lbl.Position = UDim2.fromOffset(topPos.X - 75, posY + height + (Toggles.EspHealthText.Value and 16 or 2))
+            lbl.TextColor3 = EspDistanceColor
+            lbl.Visible = true
+        elseif EspDists[plr] then
+            EspDists[plr].Visible = false
+        end
+
+        if Toggles.EspSkeleton.Value and visible then
+            if not EspSkeletons[plr] then
+                local tbl = {}
+                for i = 1, #SkeletonPairs do tbl[i] = MakeLine(EspGui) end
+                EspSkeletons[plr] = tbl
+            end
+            local skel = EspSkeletons[plr]
+            for i, pair in ipairs(SkeletonPairs) do
+                local p1 = char:FindFirstChild(pair[1])
+                local p2 = char:FindFirstChild(pair[2])
+                if p1 and p2 then
+                    local v1, on1 = cam:WorldToViewportPoint(p1.Position)
+                    local v2, on2 = cam:WorldToViewportPoint(p2.Position)
+                    if on1 and on2 and v1.Z > 0 and v2.Z > 0 then
+                        SetLine(skel[i], v1.X, v1.Y, v2.X, v2.Y, EspSkeletonColor, 1)
+                    else
+                        skel[i].Visible = false
+                    end
+                else
+                    skel[i].Visible = false
+                end
+            end
+        elseif EspSkeletons[plr] then
+            for _, line in pairs(EspSkeletons[plr]) do line.Visible = false end
+        end
+    end
+end)
+
+RunService.RenderStepped:Connect(function()
+    if Killed then return end
+    local cam = ws.CurrentCamera
+    if not cam then return end
+    local vp = cam.ViewportSize
+
+    if Toggles.HudKeybinds.Value then
+        EnsureKeybindList()
+        local lines = {}
+        table.insert(lines, "[menu] " .. tostring(Options.MenuKeybind.Value))
+        if Toggles.AntiFlingEnabled and Toggles.AntiFlingEnabled.Value then
+            table.insert(lines, "[anti fling] on")
+        end
+        if Toggles.NoclipEnabled and Toggles.NoclipEnabled.Value then
+            table.insert(lines, "[noclip] " .. tostring(Options.NoclipKey.Value or "none"))
+        end
+        if Toggles.FlyEnabled and Toggles.FlyEnabled.Value then
+            table.insert(lines, "[fly] " .. tostring(Options.FlyKey.Value or "none"))
+        end
+        if Toggles.SpeedwalkEnabled and Toggles.SpeedwalkEnabled.Value then
+            table.insert(lines, "[speed] " .. tostring(Options.SpeedwalkKey.Value or "none"))
+        end
+        if Toggles.InfJumpEnabled and Toggles.InfJumpEnabled.Value then
+            table.insert(lines, "[infinite jump] " .. tostring(Options.InfJumpKey.Value or "none"))
+        end
+        if Toggles.NoJumpCooldownEnabled and Toggles.NoJumpCooldownEnabled.Value then
+            table.insert(lines, "[no jump cooldown] on")
+        end
+        if Toggles.NoSlowdownEnabled and Toggles.NoSlowdownEnabled.Value then
+            table.insert(lines, "[no slowdown] on")
+        end
+        if Toggles.AimEnabled and Toggles.AimEnabled.Value then
+            table.insert(lines, "[aimbot] " .. tostring(Options.AimbotKey.Value or "none"))
+        end
+        if Toggles.SilentAimEnabled and Toggles.SilentAimEnabled.Value then
+            if Options.SilentAimKey and Options.SilentAimKey:GetState() then
+                table.insert(lines, "[silent aim] active")
+            end
+        end
+        if Toggles.SilentAimChamEnabled and Toggles.SilentAimChamEnabled.Value then
+            table.insert(lines, "[silent aim cham] on")
+        end
+        if Toggles.TriggerEnabled and Toggles.TriggerEnabled.Value then
+            table.insert(lines, "[triggerbot] on")
+        end
+        if Toggles.NoRecoilEnabled and Toggles.NoRecoilEnabled.Value then
+            table.insert(lines, "[no recoil] on")
+        end
+        if Toggles.StrafeEnabled and Toggles.StrafeEnabled.Value then
+            table.insert(lines, "[strafe] " .. tostring(Options.StrafeKey.Value or "none"))
+        end
+        if Toggles.AntiLockEnabled and Toggles.AntiLockEnabled.Value then
+            table.insert(lines, "[anti-lock] " .. tostring(Options.AntiLockKey.Value or "none"))
+        end
+        if Toggles.AutoStompEnabled and Toggles.AutoStompEnabled.Value then
+            table.insert(lines, "[auto stomp] on")
+        end
+        if Toggles.KnockStompEnabled and Toggles.KnockStompEnabled.Value then
+            table.insert(lines, "[knock stomp] on")
+        end
+        if Toggles.VoidHideEnabled and Toggles.VoidHideEnabled.Value then
+            table.insert(lines, "[voidhide] on")
+        end
+        if Toggles.SemiDesyncEnabled and Toggles.SemiDesyncEnabled.Value then
+            table.insert(lines, "[semi desync] on")
+        end
+        if #lines <= 1 then
+            lines = {"[menu] " .. tostring(Options.MenuKeybind.Value), "(nothing active)"}
+        end
+        HudKeybindsText.Text = table.concat(lines, "\n")
+        HudKeybindsText.TextColor3 = HudKeybindColor
+        local panelHeight = #lines * 16 + 14
+        HudKeybindsContainer.Size = UDim2.fromOffset(200, panelHeight)
+        HudKeybindsContainer.Position = UDim2.fromOffset(10, vp.Y / 2 - panelHeight / 2)
+        HudKeybindsContainer.Visible = true
+    elseif HudKeybindsContainer then
+        HudKeybindsContainer.Visible = false
+    end
+end)
+
+RunService.Heartbeat:Connect(function()
+    if Killed then return end
+    if WorldEnabled then
+        pcall(function()
+            Lighting.Brightness = WorldBrightness
+            Lighting.ClockTime = WorldClockTime
+            Lighting.FogColor = WorldFogColorPick
+            Lighting.Ambient = WorldAmbientColor
+            Lighting.OutdoorAmbient = WorldOutdoorAmbient
+            Lighting.ExposureCompensation = WorldExposure
+        end)
+    end
+    if NoFogEnabled then
+        pcall(function() Lighting.FogStart = 0 Lighting.FogEnd = 1e9 end)
+    elseif WorldEnabled then
+        pcall(function() Lighting.FogStart = WorldFogStart Lighting.FogEnd = WorldFogEnd end)
+    end
+    if NoShadowsEnabled and Lighting.GlobalShadows then
+        pcall(function() Lighting.GlobalShadows = false end)
+    end
+end)
+
+RunService.Heartbeat:Connect(function() AntiLockUpdate() end)
+
+RunService.Heartbeat:Connect(function()
+    if Killed then return end
+    if not AutoBuyState.isactive then return end
+    if not Utils.hascharacter(LocalPlayer) then
+        AutoBuyState.hasboughtthislife = false
+        AutoBuyState.boughtitems = {}
+        return
+    end
+    if DaHood.getarmor(LocalPlayer) < AutoBuyState.armorthreshold then
+        AutoBuy.BuyArmor()
+    end
+end)
+
+local function KillScript()
+    if Killed then return end
+    Killed = true
+
+    if OriginalNamecall then
+        pcall(function()
+            local mt = getrawmetatable(game)
+            setreadonly(mt, false)
+            mt.__namecall = OriginalNamecall
+            setreadonly(mt, true)
+        end)
+    end
+
+    if OriginalNewIndex then
+        pcall(function()
+            local mt = getrawmetatable(game)
+            setreadonly(mt, false)
+            mt.__newindex = OriginalNewIndex
+            setreadonly(mt, true)
+        end)
+    end
+
+    pcall(function()
+        if OriginalFpsCap then
+            setfpscap(OriginalFpsCap)
+        else
+            setfpscap(60)
+        end
+    end)
+
+    pcall(function()
+        for _, toggle in pairs(Toggles or {}) do
+            pcall(function()
+                if toggle and toggle.SetValue then
+                    toggle:SetValue(false)
+                end
+            end)
+        end
+    end)
+
+    pcall(function() RunService:UnbindFromRenderStep("UnnamedEnchantmentsSpeedwalk") end)
+    pcall(function() RunService:UnbindFromRenderStep("UnnamedEnchantmentsFlight") end)
+    pcall(function() RunService:UnbindFromRenderStep("UnnamedEnchantmentsStrafe") end)
+
+    pcall(function()
+        Lighting.Brightness = LightingSnapshot.Brightness
+        Lighting.ClockTime = LightingSnapshot.ClockTime
+        Lighting.FogColor = LightingSnapshot.FogColor
+        Lighting.FogStart = LightingSnapshot.FogStart
+        Lighting.FogEnd = LightingSnapshot.FogEnd
+        Lighting.Ambient = LightingSnapshot.Ambient
+        Lighting.OutdoorAmbient = LightingSnapshot.OutdoorAmbient
+        Lighting.ExposureCompensation = LightingSnapshot.ExposureCompensation
+        Lighting.GlobalShadows = LightingSnapshot.GlobalShadows
+    end)
+
+    pcall(function()
+        local char = LocalPlayer.Character
+        if char then
+            local head = char:FindFirstChild("Head")
+            if head then
+                head.Transparency = 0
+                head.CanCollide = true
+                head.LocalTransparencyModifier = 0
+                for _, d in ipairs(head:GetChildren()) do
+                    if d:IsA("Decal") or d:IsA("Texture") then
+                        d.Transparency = 0
+                    end
+                end
+            end
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = true
+                    pcall(function() part.CollisionGroup = "Default" end)
+                end
+            end
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then
+                hum.WalkSpeed = 16
+                hum.AutoRotate = true
+                hum.PlatformStand = false
+            end
+        end
+    end)
+
+    pcall(function()
+        if VoidHideSpamConnection then
+            VoidHideSpamConnection:Disconnect()
+            VoidHideSpamConnection = nil
+        end
+    end)
+
+    pcall(function() EspGui:Destroy() end)
+
+    pcall(function() Library:Unload() end)
+
+    print("[unnamed enchantments] killed")
+end
+
+MenuGroup:AddDivider()
+
+MenuGroup:AddToggle("UnlockFpsEnabled", {
+    Text = "unlock fps",
+    Default = false,
+    Tooltip = "locks your framerate to the cap below",
+    Callback = function(v)
+        UnlockFpsEnabled = v
+        ApplyFpsCap()
+    end,
+})
+
+MenuGroup:AddSlider("UnlockFpsValue", {
+    Text = "fps cap",
+    Default = 240,
+    Min = 60,
+    Max = 9999,
+    Rounding = 0,
+    Suffix = "",
+    Callback = function(v)
+        UnlockFpsValue = v
+        if UnlockFpsEnabled then ApplyFpsCap() end
+    end,
+})
+
+MenuGroup:AddDivider()
+
+MenuGroup:AddButton("kill script", function()
+    KillScript()
+end)
+
+SaveManager:LoadAutoloadConfig()
+
+print("[unnamed enchantments] loaded")
